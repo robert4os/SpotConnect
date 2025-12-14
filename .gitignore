@@ -54,7 +54,7 @@ spotconnect*.zip
 !build.sh
 
 # vscode
-.vscode/
+.vscode
 
 # RH specific
-RH/
+RH

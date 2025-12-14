@@ -249,8 +249,9 @@ sudo apt-get install protobuf-compiler
 ```
 cd ~
 git clone http://github.com/philippe44/spotconnect
-cd ~/spotconnect && git submodule update --init
-cd ~/spotconnect/common/cspot && git submodule update --init --recursive
+cd ~/spotconnect && git submodule update --init --remote
+cd ~/spotconnect/common/cspot && git submodule update --init --recursive --remote
+cd ~/spotconnect/common/libpupnp && git submodule update --init --recursive --remote
 ```
 NB: you can speed up all clonings by a lot by adding `--depth 1` option to just to a shallow clone (you probably don't need all the commits)
 

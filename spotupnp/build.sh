@@ -30,6 +30,14 @@ declare -a compilers
 
 IFS= read -ra candidates <<< "$list"
 
+# check for build type: static, dynamic, or both (default)
+build_type="both"
+if [[ $@[*]} =~ static ]]; then
+	build_type="static"
+elif [[ $@[*]} =~ dynamic ]]; then
+	build_type="dynamic"
+fi
+
 # do we have "clean" somewhere in parameters (assuming no compiler has "clean" in it...)
 if [[ $@[*]} =~ clean ]]; then
 	clean="clean"
@@ -100,7 +108,14 @@ do
 		cmake $pwd -DCMAKE_SYSTEM_NAME=${cmake_name["$host"]:-"$host"} -DCMAKE_SYSTEM_PROCESSOR=${cmake_processor["$platform"]:-"$platform"} -DCMAKE_C_COMPILER=$CC -DCMAKE_CXX_COMPILER=$CXX -DHOST=$host -DPLATFORM=$platform -DBELL_EXTERNAL_MBEDTLS=$pwd/../common/libmbedtls
 	fi
 	
-	make -j16 && mkdir -p $pwd/bin && cp ./spotupnp-$host-$platform* $pwd/bin
+	# Build based on selected type
+	if [ "$build_type" == "static" ]; then
+		make -j16 spotupnp-$host-$platform-static && mkdir -p $pwd/bin && cp ./spotupnp-$host-$platform-static $pwd/bin
+	elif [ "$build_type" == "dynamic" ]; then
+		make -j16 spotupnp-$host-$platform && mkdir -p $pwd/bin && cp ./spotupnp-$host-$platform $pwd/bin
+	else
+		make -j16 && mkdir -p $pwd/bin && cp ./spotupnp-$host-$platform* $pwd/bin
+	fi
 
 	cd $pwd
 

@@ -12,9 +12,12 @@ else()
 			message(STATUS "using CMAKE_C_COMPILER ${CMAKE_C_COMPILER}")
 		else()
 			execute_process(COMMAND bash "-c" "readlink -f `which cc`" OUTPUT_VARIABLE C_COMPILER)
-			cmake_path(GET C_COMPILER FILENAME C_COMPILER)
 			message(STATUS "guessing compiler ${C_COMPILER}")
 		endif()
+
+		# Extract just the filename from the full path
+		cmake_path(GET C_COMPILER FILENAME C_COMPILER)
+		string(STRIP "${C_COMPILER}" C_COMPILER)
 
 		string(REGEX MATCHALL "([^-]+)" CC_SPLIT ${C_COMPILER})
 
@@ -28,7 +31,10 @@ else()
 		elseif(C_TUPLE_SIZE GREATER 1)
 			list(GET CC_SPLIT 1 HOST)
 		else()
-			set(HOST "linux")
+			# Fallback for native compilers - use system info
+			set(HOST "${CMAKE_SYSTEM_NAME}")
+			set(PLATFORM "${CMAKE_SYSTEM_PROCESSOR}")
+			string(TOLOWER "${HOST}" HOST)
 		endif()
 	endif()
     set(LIBRARY_SUFFIX ".a")

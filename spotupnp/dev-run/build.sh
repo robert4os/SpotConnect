@@ -203,9 +203,9 @@ CURRENT_SOURCE_HASH=""
     [[ -f "CMakeLists.txt" ]] && md5sum CMakeLists.txt 2>/dev/null
     [[ -f "build.sh" ]] && md5sum build.sh 2>/dev/null
     
-    # Hash cspot submodule commit
-    if [[ -d "../common/cspot/.git" ]]; then
-        echo "cspot: $(cd ../common/cspot && git rev-parse HEAD 2>/dev/null)"
+    # Hash cspot submodule commit (use what git expects, not what's checked out)
+    if [[ -d "../common/cspot" ]]; then
+        echo "cspot: $(cd .. && git ls-tree HEAD common/cspot | awk '{print $3}' 2>/dev/null)"
     fi
     
     # Hash other critical dependencies

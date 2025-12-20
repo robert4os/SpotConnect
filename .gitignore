@@ -61,3 +61,4 @@ RH
 
 # Development run directory
 spotupnp/dev-run/config.xml
+!spotupnp/dev-run/*.sh

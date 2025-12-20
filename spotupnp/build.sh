@@ -93,7 +93,8 @@ do
 
 	if [[ $CC =~ -gcc ]]; then
 		export CXX=${CC%-*}-g++
-		export LDFLAGS=-s
+		# Don't strip symbols - keep debug info for crash analysis
+		export LDFLAGS=""
 	else
 		export CXX=${CC%-*}-c++
 		export LDFLAGS=-lc++

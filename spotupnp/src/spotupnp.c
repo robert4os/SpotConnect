@@ -1323,6 +1323,34 @@ static bool Stop(bool exit) {
 }
 
 /*---------------------------------------------------------------------------*/
+static void fatal_signal_handler(int signum) {
+	const char *signame = "UNKNOWN";
+	switch(signum) {
+		case SIGSEGV: signame = "SIGSEGV (Segmentation Fault)"; break;
+		case SIGABRT: signame = "SIGABRT (Abort)"; break;
+#ifdef SIGBUS
+		case SIGBUS: signame = "SIGBUS (Bus Error)"; break;
+#endif
+		case SIGFPE: signame = "SIGFPE (Floating Point Exception)"; break;
+		case SIGILL: signame = "SIGILL (Illegal Instruction)"; break;
+	}
+	
+	// Use async-signal-safe functions only
+	const char msg1[] = "\n##### FATAL CRASH: Signal ";
+	write(STDERR_FILENO, msg1, sizeof(msg1) - 1);
+	write(STDERR_FILENO, signame, strlen(signame));
+	write(STDERR_FILENO, " #####\n", 8);
+	write(STDERR_FILENO, "Process will terminate. Check dmesg for kernel details.\n", 57);
+	
+	// Flush stderr
+	fsync(STDERR_FILENO);
+	
+	// Re-raise the signal with default handler to allow core dump
+	signal(signum, SIG_DFL);
+	raise(signum);
+}
+
+/*---------------------------------------------------------------------------*/
 static void sighandler(int signum) {
 	if (!glGracefullShutdown) {
 		for (int i = 0; i < glMaxDevices; i++) {
@@ -1475,6 +1503,7 @@ bool ParseArgs(int argc, char **argv) {
 /*																			  */
 /*----------------------------------------------------------------------------*/
 int main(int argc, char *argv[]) {
+	// Graceful shutdown signals
 	signal(SIGINT, sighandler);
 	signal(SIGTERM, sighandler);
 #if defined(SIGQUIT)
@@ -1486,6 +1515,15 @@ int main(int argc, char *argv[]) {
 #if defined(SIGPIPE)
 	signal(SIGPIPE, SIG_IGN);
 #endif
+
+	// Fatal crash signals - log before dying
+	signal(SIGSEGV, fatal_signal_handler);
+	signal(SIGABRT, fatal_signal_handler);
+#ifdef SIGBUS
+	signal(SIGBUS, fatal_signal_handler);
+#endif
+	signal(SIGFPE, fatal_signal_handler);
+	signal(SIGILL, fatal_signal_handler);
 
 	// otherwise some atof/strtod fail with '.'
 	setlocale(LC_NUMERIC, "C");

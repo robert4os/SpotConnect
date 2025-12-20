@@ -12,6 +12,10 @@ BINARY_PATH_FILE="$SPOTCONNECT_DIR/.binary_path"
 CLEAN_BUILD=false
 RESTART=false
 
+# Enable core dumps for development/debugging
+ulimit -c unlimited
+echo "Dev-run: Core dumps enabled (ulimit -c unlimited)"
+
 # Parse all command line arguments
 while [[ $# -gt 0 ]]; do
     case "$1" in
@@ -409,6 +413,15 @@ echo "    Created: $SPOTCONNECT_DIR"
 if [[ -f "/tmp/spotupnp-crash-latest.txt" ]]; then
     rm -f "/tmp/spotupnp-crash-latest.txt"
     echo "    Removed old crash dump"
+fi
+
+# Check and report core dump status
+CORE_LIMIT=$(ulimit -c)
+CORE_PATTERN=$(cat /proc/sys/kernel/core_pattern 2>/dev/null || echo "unknown")
+echo "    Core dumps: enabled (limit: $CORE_LIMIT)"
+echo "    Core pattern: $CORE_PATTERN"
+if [[ "$CORE_PATTERN" == *"|"* ]]; then
+    echo "    Note: Cores piped to crash handler (WSL), check /tmp for captured cores"
 fi
 
 # Save current config hash for next run

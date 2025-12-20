@@ -3,7 +3,7 @@
 # Crash Analysis Script for spotupnp
 # Automatically analyzes crash dumps and provides debugging information
 
-set -euo pipefail
+set -uo pipefail  # Removed -e to allow grep failures
 
 COLOR_RED='\033[0;31m'
 COLOR_GREEN='\033[0;32m'
@@ -40,40 +40,37 @@ fi
 echo -e "Binary: ${COLOR_GREEN}$BINARY${COLOR_RESET}"
 echo ""
 
-# Check if a specific crash file was provided
+# Use fixed crash file location
+CRASH_FILE="/tmp/spotupnp-crash-latest.txt"
+
+# Check if a specific crash file was provided as argument (for debugging old crashes)
 if [ $# -gt 0 ]; then
     CRASH_FILE="$1"
-    if [ ! -f "$CRASH_FILE" ]; then
-        echo -e "${COLOR_RED}Error: Crash file not found: $CRASH_FILE${COLOR_RESET}"
-        exit 1
-    fi
-else
-    # Find most recent crash dump
-    CRASH_FILE=$(ls -t /tmp/spotupnp-crash-*.txt 2>/dev/null | head -1)
-    if [ -z "$CRASH_FILE" ]; then
-        echo -e "${COLOR_YELLOW}No crash dump files found in /tmp/${COLOR_RESET}"
-        echo "Looking for crashes in dmesg..."
+fi
+
+if [ ! -f "$CRASH_FILE" ]; then
+    echo -e "${COLOR_YELLOW}No crash dump found: $CRASH_FILE${COLOR_RESET}"
+    echo "Looking for crashes in dmesg..."
+    echo ""
+    
+    DMESG_OUT=$(dmesg | grep -i "spotupnp.*segfault\|spotupnp.*signal" | tail -5)
+    if [ -n "$DMESG_OUT" ]; then
+        echo -e "${COLOR_YELLOW}=== Recent crashes in kernel log ===${COLOR_RESET}"
+        echo "$DMESG_OUT"
         echo ""
         
-        DMESG_OUT=$(dmesg | grep -i "spotupnp.*segfault\|spotupnp.*signal" | tail -5)
-        if [ -n "$DMESG_OUT" ]; then
-            echo -e "${COLOR_YELLOW}=== Recent crashes in kernel log ===${COLOR_RESET}"
-            echo "$DMESG_OUT"
+        # Extract address from most recent
+        LAST_CRASH=$(echo "$DMESG_OUT" | tail -1)
+        if echo "$LAST_CRASH" | grep -q "ip "; then
+            IP_ADDR=$(echo "$LAST_CRASH" | grep -oP 'ip \K[0-9a-f]+')
+            echo -e "${COLOR_GREEN}Attempting to decode crash address: 0x$IP_ADDR${COLOR_RESET}"
             echo ""
-            
-            # Extract address from most recent
-            LAST_CRASH=$(echo "$DMESG_OUT" | tail -1)
-            if echo "$LAST_CRASH" | grep -q "ip "; then
-                IP_ADDR=$(echo "$LAST_CRASH" | grep -oP 'ip \K[0-9a-f]+')
-                echo -e "${COLOR_GREEN}Attempting to decode crash address: 0x$IP_ADDR${COLOR_RESET}"
-                echo ""
-                addr2line -e "$BINARY" -f -C "0x$IP_ADDR" 2>/dev/null || echo "Could not decode (binary may be stripped)"
-            fi
-        else
-            echo "No crashes found in dmesg either"
+            addr2line -e "$BINARY" -f -C "0x$IP_ADDR" 2>/dev/null || echo "Could not decode (binary may be stripped)"
         fi
-        exit 0
+    else
+        echo "No crashes found in dmesg either"
     fi
+    exit 0
 fi
 
 echo -e "Analyzing: ${COLOR_GREEN}$CRASH_FILE${COLOR_RESET}"
@@ -87,18 +84,19 @@ echo ""
 # Extract and decode stack trace addresses
 echo -e "${COLOR_YELLOW}=== Decoded Stack Trace ===${COLOR_RESET}"
 
-# Check if binary has symbols
+# Check if binary has symbols - test by counting symbol lines
+SYMBOL_COUNT=$(nm "$BINARY" 2>/dev/null | wc -l)
 HAS_SYMBOLS=false
-if nm "$BINARY" 2>/dev/null | head -1 | grep -q .; then
+
+if [ "$SYMBOL_COUNT" -gt 10 ]; then
     HAS_SYMBOLS=true
-    echo -e "${COLOR_GREEN}Binary has symbols - decoding addresses...${COLOR_RESET}"
+    echo -e "${COLOR_GREEN}Binary has symbols ($SYMBOL_COUNT symbols found) - decoding addresses...${COLOR_RESET}"
     echo ""
     
     # Extract addresses from backtrace and decode them
-    grep -oP '\[0x[0-9a-f]+\]' "$CRASH_FILE" | while read -r addr; do
-        addr=${addr#[}
-        addr=${addr%]}
-        
+    ADDRESSES=$(grep -oP '\[0x[0-9a-f]+\]' "$CRASH_FILE" | tr -d '[]')
+    
+    for addr in $ADDRESSES; do
         # Try to decode both function and line
         function_info=$(addr2line -e "$BINARY" -f "$addr" 2>/dev/null | head -1)
         location_info=$(addr2line -e "$BINARY" -C "$addr" 2>/dev/null | tail -1)

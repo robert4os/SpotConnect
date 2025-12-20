@@ -405,6 +405,12 @@ echo "==> Preparing runtime environment..."
 mkdir -p "$SPOTCONNECT_DIR"
 echo "    Created: $SPOTCONNECT_DIR"
 
+# Remove old crash file from previous session
+if [[ -f "/tmp/spotupnp-crash-latest.txt" ]]; then
+    rm -f "/tmp/spotupnp-crash-latest.txt"
+    echo "    Removed old crash dump"
+fi
+
 # Save current config hash for next run
 if [[ -f "$CONFIG_FILE" && -n "$CURRENT_CONFIG_HASH" ]]; then
     echo "$CURRENT_CONFIG_HASH" > "$CONFIG_HASH_FILE"

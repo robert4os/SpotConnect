@@ -1373,9 +1373,9 @@ static void fatal_signal_handler_detailed(int signum, siginfo_t *info, void *con
 	const char *bt_end = "\n=== End Stack Trace ===\n\n";
 	write(STDERR_FILENO, bt_end, strlen(bt_end));
 	
-	// Try to write crash dump to file
+	// Try to write crash dump to file (fixed filename - one per dev session)
 	char crashfile[256];
-	snprintf(crashfile, sizeof(crashfile), "/tmp/spotupnp-crash-%ld-%d.txt", (long)time(NULL), getpid());
+	snprintf(crashfile, sizeof(crashfile), "/tmp/spotupnp-crash-latest.txt");
 	int fd = open(crashfile, O_WRONLY | O_CREAT | O_TRUNC, 0644);
 	if (fd >= 0) {
 		write(fd, msg, len);

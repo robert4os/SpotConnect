@@ -105,16 +105,35 @@ do
 	if [ -n "$clean" ] || [ -z "$(ls -A)" ]; then
 		rm -rf *
 		rm -f $pwd/bin/spotupnp-$host-$platform*
-		cmake $pwd -DCMAKE_SYSTEM_NAME=${cmake_name["$host"]:-"$host"} -DCMAKE_SYSTEM_PROCESSOR=${cmake_processor["$platform"]:-"$platform"} -DCMAKE_C_COMPILER=$CC -DCMAKE_CXX_COMPILER=$CXX -DHOST=$host -DPLATFORM=$platform -DBELL_EXTERNAL_MBEDTLS=$pwd/../common/libmbedtls
+		if ! cmake $pwd -DCMAKE_SYSTEM_NAME=${cmake_name["$host"]:-"$host"} -DCMAKE_SYSTEM_PROCESSOR=${cmake_processor["$platform"]:-"$platform"} -DCMAKE_C_COMPILER=$CC -DCMAKE_CXX_COMPILER=$CXX -DHOST=$host -DPLATFORM=$platform -DBELL_EXTERNAL_MBEDTLS=$pwd/../common/libmbedtls; then
+			echo "ERROR: cmake failed for $host-$platform"
+			cd $pwd
+			exit 1
+		fi
 	fi
 	
 	# Build based on selected type
 	if [ "$build_type" == "static" ]; then
-		make -j16 spotupnp-$host-$platform-static && mkdir -p $pwd/bin && cp ./spotupnp-$host-$platform-static $pwd/bin
+		if ! make -j16 spotupnp-$host-$platform-static; then
+			echo "ERROR: make failed for $host-$platform-static"
+			cd $pwd
+			exit 1
+		fi
+		mkdir -p $pwd/bin && cp ./spotupnp-$host-$platform-static $pwd/bin
 	elif [ "$build_type" == "dynamic" ]; then
-		make -j16 spotupnp-$host-$platform && mkdir -p $pwd/bin && cp ./spotupnp-$host-$platform $pwd/bin
+		if ! make -j16 spotupnp-$host-$platform; then
+			echo "ERROR: make failed for $host-$platform"
+			cd $pwd
+			exit 1
+		fi
+		mkdir -p $pwd/bin && cp ./spotupnp-$host-$platform $pwd/bin
 	else
-		make -j16 && mkdir -p $pwd/bin && cp ./spotupnp-$host-$platform* $pwd/bin
+		if ! make -j16; then
+			echo "ERROR: make failed for $host-$platform"
+			cd $pwd
+			exit 1
+		fi
+		mkdir -p $pwd/bin && cp ./spotupnp-$host-$platform* $pwd/bin
 	fi
 
 	cd $pwd
@@ -131,3 +150,4 @@ done
 
 
 
+	

@@ -8,6 +8,7 @@ SPOTCONNECT_DIR="$HOME/.spotconnect"
 LOG_FILE="$SPOTCONNECT_DIR/spotupnp.log"
 CONFIG_HASH_FILE="$SPOTCONNECT_DIR/.config_hash"
 SOURCE_HASH_FILE="$SPOTCONNECT_DIR/.source_hash"
+BINARY_PATH_FILE="$SPOTCONNECT_DIR/.binary_path"
 CLEAN_BUILD=false
 RESTART=false
 
@@ -186,27 +187,46 @@ echo "==> Checking for source code changes..."
 cd "$BUILD_DIR"
 SOURCE_CHANGED=false
 
-# Calculate hash of all source files in src/ directory
+# Calculate comprehensive hash including:
+# - src/ directory (our code)
+# - CMakeLists.txt (build config)
+# - build.sh (build script)
+# - cspot submodule commit (git rev-parse HEAD in submodule)
 CURRENT_SOURCE_HASH=""
-if [[ -d "src" ]]; then
-    # Create hash based on file contents and modification times
-    CURRENT_SOURCE_HASH=$(find src -type f \( -name "*.c" -o -name "*.cpp" -o -name "*.h" -o -name "*.hpp" \) -exec md5sum {} \; 2>/dev/null | sort | md5sum | awk '{print $1}')
+{
+    # Hash source files
+    if [[ -d "src" ]]; then
+        find src -type f \( -name "*.c" -o -name "*.cpp" -o -name "*.h" -o -name "*.hpp" \) -exec md5sum {} \; 2>/dev/null | sort
+    fi
     
-    if [[ -f "$SOURCE_HASH_FILE" ]]; then
-        PREVIOUS_SOURCE_HASH=$(cat "$SOURCE_HASH_FILE")
-        
-        if [[ "$CURRENT_SOURCE_HASH" != "$PREVIOUS_SOURCE_HASH" ]]; then
-            echo "    Source code changes detected"
-            SOURCE_CHANGED=true
-        else
-            echo "    No source changes detected since last build"
-        fi
-    else
-        echo "    First build - no previous source hash found"
+    # Hash build configuration
+    [[ -f "CMakeLists.txt" ]] && md5sum CMakeLists.txt 2>/dev/null
+    [[ -f "build.sh" ]] && md5sum build.sh 2>/dev/null
+    
+    # Hash cspot submodule commit
+    if [[ -d "../common/cspot/.git" ]]; then
+        echo "cspot: $(cd ../common/cspot && git rev-parse HEAD 2>/dev/null)"
+    fi
+    
+    # Hash other critical dependencies
+    [[ -f "../common/cspot/CMakeLists.txt" ]] && md5sum ../common/cspot/CMakeLists.txt 2>/dev/null
+} | md5sum | awk '{print $1}' > /tmp/source_hash_calc.tmp
+
+CURRENT_SOURCE_HASH=$(cat /tmp/source_hash_calc.tmp)
+rm -f /tmp/source_hash_calc.tmp
+
+if [[ -f "$SOURCE_HASH_FILE" ]]; then
+    PREVIOUS_SOURCE_HASH=$(cat "$SOURCE_HASH_FILE")
+    
+    if [[ "$CURRENT_SOURCE_HASH" != "$PREVIOUS_SOURCE_HASH" ]]; then
+        echo "    Source code changes detected"
         SOURCE_CHANGED=true
+    else
+        echo "    No source changes detected since last build"
     fi
 else
-    echo "    WARNING: src directory not found"
+    echo "    First build - no previous source hash found"
+    SOURCE_CHANGED=true
 fi
 
 echo ""
@@ -395,6 +415,11 @@ fi
 if [[ -n "$CURRENT_SOURCE_HASH" ]]; then
     echo "$CURRENT_SOURCE_HASH" > "$SOURCE_HASH_FILE"
     echo "    Saved source hash for next comparison"
+fi
+
+# Save binary path for crash analysis tools
+if [[ -n "$BINARY_PATH" && -f "$BINARY_PATH" ]]; then
+    echo "$BINARY_PATH" > "$BINARY_PATH_FILE"
 fi
 
 echo ""

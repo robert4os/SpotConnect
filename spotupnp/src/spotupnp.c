@@ -14,6 +14,13 @@
 #include <process.h>
 #endif
 
+#ifndef _WIN32
+#include <execinfo.h>
+#include <unistd.h>
+#include <time.h>
+#include <fcntl.h>
+#endif
+
 #include "platform.h"
 #include "ixmlextra.h"
 #include "spotupnp.h"
@@ -817,14 +824,15 @@ static void *UpdateThread(void *args) {
 			} else if (Update->Type == BYE_BYE) {
 
 				Device = UDN2Device(Update->Data);
-
-				// Multiple bye-bye might be sent
-				if (!CheckAndLock(Device)) continue;
-
-				LOG_INFO("[%p]: renderer bye-bye: %s", Device, Device->Config.Name);
-				spotDeletePlayer(Device->SpotPlayer);
-				// device's mutex returns unlocked
-				DelMRDevice(Device);
+				
+				// Just log and ignore - many devices (like Bose speakers) send spurious
+				// bye-bye messages when entering sleep mode but remain available
+				if (Device) {
+					LOG_DEBUG("[%p]: renderer bye-bye ignored: %s (device remains registered)", Device, Device->Config.Name);
+				}
+				
+				// Don't delete, don't mark timeout - completely ignore
+				continue;
 
 			// device keepalive or search response
 			} else if (Update->Type == DISCOVERY) {
@@ -1323,8 +1331,13 @@ static bool Stop(bool exit) {
 }
 
 /*---------------------------------------------------------------------------*/
-static void fatal_signal_handler(int signum) {
+#ifndef _WIN32
+static void fatal_signal_handler_detailed(int signum, siginfo_t *info, void *context) {
 	const char *signame = "UNKNOWN";
+	char msg[512];
+	int len;
+	
+	// Determine signal name
 	switch(signum) {
 		case SIGSEGV: signame = "SIGSEGV (Segmentation Fault)"; break;
 		case SIGABRT: signame = "SIGABRT (Abort)"; break;
@@ -1335,20 +1348,84 @@ static void fatal_signal_handler(int signum) {
 		case SIGILL: signame = "SIGILL (Illegal Instruction)"; break;
 	}
 	
-	// Use async-signal-safe functions only
-	const char msg1[] = "\n##### FATAL CRASH: Signal ";
-	write(STDERR_FILENO, msg1, sizeof(msg1) - 1);
-	write(STDERR_FILENO, signame, strlen(signame));
-	write(STDERR_FILENO, " #####\n", 8);
-	write(STDERR_FILENO, "Process will terminate. Check dmesg for kernel details.\n", 57);
+	// Write crash header with address info (async-signal-safe)
+	len = snprintf(msg, sizeof(msg),
+		"\n################################################################################\n"
+		"##### FATAL CRASH DETECTED #####\n"
+		"Signal: %s\n"
+		"Fault Address: %p\n"
+		"Time: %ld\n"
+		"PID: %d\n"
+		"################################################################################\n",
+		signame, info->si_addr, (long)time(NULL), getpid());
+	write(STDERR_FILENO, msg, len);
 	
-	// Flush stderr
+	// Get and write stack trace
+	void *trace[50];
+	int trace_size = backtrace(trace, 50);
+	
+	const char *bt_msg = "\n=== Stack Trace (most recent call first) ===\n";
+	write(STDERR_FILENO, bt_msg, strlen(bt_msg));
+	
+	// Write backtrace to stderr (will appear in log)
+	backtrace_symbols_fd(trace, trace_size, STDERR_FILENO);
+	
+	const char *bt_end = "\n=== End Stack Trace ===\n\n";
+	write(STDERR_FILENO, bt_end, strlen(bt_end));
+	
+	// Try to write crash dump to file
+	char crashfile[256];
+	snprintf(crashfile, sizeof(crashfile), "/tmp/spotupnp-crash-%ld-%d.txt", (long)time(NULL), getpid());
+	int fd = open(crashfile, O_WRONLY | O_CREAT | O_TRUNC, 0644);
+	if (fd >= 0) {
+		write(fd, msg, len);
+		write(fd, bt_msg, strlen(bt_msg));
+		
+		// Write symbols to file
+		char **symbols = backtrace_symbols(trace, trace_size);
+		if (symbols) {
+			for (int i = 0; i < trace_size; i++) {
+				write(fd, symbols[i], strlen(symbols[i]));
+				write(fd, "\n", 1);
+			}
+			free(symbols); // OK in signal handler when exiting
+		}
+		
+		write(fd, bt_end, strlen(bt_end));
+		
+		// Add instructions
+		const char *instructions =
+			"\n=== Debugging Instructions ===\n"
+			"1. Check kernel log: dmesg | tail -50\n"
+			"2. If core dump enabled: gdb spotupnp-linux-*-static core.*\n"
+			"3. In GDB, type: bt full\n"
+			"4. To decode addresses: addr2line -e spotupnp-linux-*-static -f <address>\n"
+			"\nTo enable core dumps:\n"
+			"  ulimit -c unlimited\n"
+			"  echo '/tmp/core.%e.%p' | sudo tee /proc/sys/kernel/core_pattern\n"
+			"\n";
+		write(fd, instructions, strlen(instructions));
+		
+		close(fd);
+		
+		// Notify about crash file
+		len = snprintf(msg, sizeof(msg), "Crash dump written to: %s\n\n", crashfile);
+		write(STDERR_FILENO, msg, len);
+	}
+	
+	const char *footer = "Process will now terminate.\n"
+		"Check logs above and kernel log (dmesg) for details.\n\n";
+	write(STDERR_FILENO, footer, strlen(footer));
+	
+	// Flush everything
 	fsync(STDERR_FILENO);
+	if (fd >= 0) fsync(fd);
 	
 	// Re-raise the signal with default handler to allow core dump
 	signal(signum, SIG_DFL);
 	raise(signum);
 }
+#endif
 
 /*---------------------------------------------------------------------------*/
 static void sighandler(int signum) {
@@ -1516,14 +1593,22 @@ int main(int argc, char *argv[]) {
 	signal(SIGPIPE, SIG_IGN);
 #endif
 
-	// Fatal crash signals - log before dying
-	signal(SIGSEGV, fatal_signal_handler);
-	signal(SIGABRT, fatal_signal_handler);
+#ifndef _WIN32
+	// Fatal crash signals - enhanced handler with backtrace
+	struct sigaction sa;
+	memset(&sa, 0, sizeof(sa));
+	sa.sa_sigaction = fatal_signal_handler_detailed;
+	sa.sa_flags = SA_SIGINFO | SA_RESETHAND; // SA_RESETHAND allows default handler after ours
+	sigemptyset(&sa.sa_mask);
+	
+	sigaction(SIGSEGV, &sa, NULL);
+	sigaction(SIGABRT, &sa, NULL);
 #ifdef SIGBUS
-	signal(SIGBUS, fatal_signal_handler);
+	sigaction(SIGBUS, &sa, NULL);
 #endif
-	signal(SIGFPE, fatal_signal_handler);
-	signal(SIGILL, fatal_signal_handler);
+	sigaction(SIGFPE, &sa, NULL);
+	sigaction(SIGILL, &sa, NULL);
+#endif
 
 	// otherwise some atof/strtod fail with '.'
 	setlocale(LC_NUMERIC, "C");

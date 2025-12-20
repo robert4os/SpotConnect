@@ -131,6 +131,9 @@ if(NOT MSVC)
 		endif()
         target_include_directories(${PROJECT}-static PRIVATE "." ${EXTRA_INCLUDES})
         target_compile_definitions(${PROJECT}-static PRIVATE -DFLAC__NO_DLL -DUPNP_STATIC_LIB -D_GNU_SOURCE)
+        # Add debug symbols and dynamic symbol export for better crash analysis
+        target_compile_options(${PROJECT}-static PRIVATE -g -rdynamic -fno-omit-frame-pointer)
+        target_link_options(${PROJECT}-static PRIVATE -rdynamic)
         target_link_libraries(${PROJECT}-static PUBLIC cspot ${EXTRA_LIBS})
 	endif()
 	if(CMAKE_SYSTEM_NAME STREQUAL SunOS)
@@ -140,4 +143,7 @@ endif()
 
 target_include_directories(${PROJECT} PRIVATE "." ${EXTRA_INCLUDES})
 target_compile_definitions(${PROJECT} PRIVATE -DFLAC__NO_DLL -DUPNP_STATIC_LIB -D_GNU_SOURCE)
+# Add debug symbols and dynamic symbol export for better crash analysis
+target_compile_options(${PROJECT} PRIVATE -g -rdynamic -fno-omit-frame-pointer)
+target_link_options(${PROJECT} PRIVATE -rdynamic)
 target_link_libraries(${PROJECT} PUBLIC cspot ${EXTRA_LIBS})

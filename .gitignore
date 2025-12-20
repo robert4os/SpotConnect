@@ -58,3 +58,6 @@ spotconnect*.zip
 
 # RH specific
 RH
+
+# Development run directory
+spotupnp/dev-run/config.xml

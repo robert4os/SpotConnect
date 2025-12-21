@@ -9,6 +9,7 @@
 #include <fstream>
 #include <stdarg.h>
 #include <deque>
+#include <unordered_set>
 #include "time.h"
 
 #ifdef BELL_ONLY_CJSON
@@ -131,6 +132,11 @@ public:
     bool friend getMetaForUrl(CSpotPlayer* self, const std::string url, metadata_t* metadata);
 };
 
+// Static registry to track valid CSpotPlayer instances - declared after class definition
+// This allows the callback to safely check if 'this' is still valid
+static std::mutex validPlayersMutex;
+static std::unordered_set<CSpotPlayer*> validPlayers;
+
 CSpotPlayer::CSpotPlayer(char* name, char* id, char *credentials, struct in_addr addr, AudioFormat format, char* codec, bool flow,
     int64_t contentLength, int cacheMode, struct shadowPlayer* shadow, pthread_mutex_t* mutex) : bell::Task("playerInstance",
         48 * 1024, 0, 0),
@@ -138,15 +144,33 @@ CSpotPlayer::CSpotPlayer(char* name, char* id, char *credentials, struct in_addr
     name(name), credentials(credentials), format(format), shadow(shadow), 
     playerMutex(mutex), cacheMode(cacheMode) {
     this->contentLength = (flow && contentLength == HTTP_CL_REAL) ? HTTP_CL_NONE : contentLength;
+    
+    // Register this player instance in the valid players set
+    {
+        std::lock_guard<std::mutex> lock(validPlayersMutex);
+        validPlayers.insert(this);
+    }
 }
 
 CSpotPlayer::~CSpotPlayer() {
+    // Unregister this player FIRST - no more callbacks should use this pointer
+    // This is the key fix: writePCM will check the registry before accessing any members
+    {
+        std::lock_guard<std::mutex> lock(validPlayersMutex);
+        validPlayers.erase(this);
+    }
+
     state = ABORT;
     isRunning = false;
     CSPOT_LOG(info, "player <%s> deletion pending", name.c_str());
 
     // unlock ourselves as we might be waiting
     clientConnected.give();
+
+    // Clear the callback to avoid further invocations
+    if (spirc && spirc->getTrackPlayer()) {
+        spirc->getTrackPlayer()->setDataCallback(nullptr);
+    }
 
     // manually unregister mDNS but all other item should be deleted automatically
     if (mdnsService) mdnsService->unregisterService();
@@ -160,8 +184,20 @@ CSpotPlayer::~CSpotPlayer() {
 }
 
 size_t CSpotPlayer::writePCM(uint8_t* data, size_t bytes, std::string_view trackUnique) {
+    // Fast early-return checks first (no locking overhead)
     // make sure we don't have a dead lock with a disconnect()
     if (!isRunning || isPaused) return 0;
+
+    // CRITICAL: Validate 'this' pointer is still valid before accessing ANY members
+    // This prevents use-after-free if callback is invoked after destructor starts
+    // Checked AFTER fast paths to minimize lock contention on hot audio path
+    {
+        std::lock_guard<std::mutex> lock(validPlayersMutex);
+        if (validPlayers.find(this) == validPlayers.end()) {
+            // Object is being/has been destroyed - abort immediately
+            return 0;
+        }
+    }
 
 #ifndef SMART_FLUSH
     if (flushed) return 0;
@@ -616,10 +652,19 @@ void CSpotPlayer::runTask() {
             // Start handling mercury messages
             ctx->session->startTask();
 
-            // exit when received an ABORT or a DISCO in ZeroConf mode 
-            while (state == LINKED) {
-                ctx->session->handlePacket();
-                if (state == DISCO && !zeroConf) state = LINKED;
+            // Wrap session handling in try/catch to prevent uncaught exceptions from crashing
+            try {
+                // exit when received an ABORT or a DISCO in ZeroConf mode 
+                while (state == LINKED) {
+                    ctx->session->handlePacket();
+                    if (state == DISCO && !zeroConf) state = LINKED;
+                }
+            } catch (const std::exception& e) {
+                CSPOT_LOG(error, "Session error: %s", e.what());
+                state = DISCO;
+            } catch (...) {
+                CSPOT_LOG(error, "Unknown session error");
+                state = DISCO;
             }
 
             spirc->disconnect();

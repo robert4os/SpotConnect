@@ -40,6 +40,47 @@ fi
 echo -e "Binary: ${COLOR_GREEN}$BINARY${COLOR_RESET}"
 echo ""
 
+# Check for GDB crash log first (more detailed)
+GDB_LOG="$SPOTCONNECT_DIR/gdb-crash.log"
+
+if [ -f "$GDB_LOG" ]; then
+    echo -e "${COLOR_GREEN}Found GDB crash artifacts: $GDB_LOG${COLOR_RESET}"
+    echo ""
+    
+    echo -e "${COLOR_YELLOW}=== GDB Crash Capture ===${COLOR_RESET}"
+    
+    # Extract signal information
+    if grep -q "Signal:" "$GDB_LOG"; then
+        echo -e "${COLOR_RED}$(grep "Signal:" "$GDB_LOG")${COLOR_RESET}"
+        echo ""
+    fi
+    
+    # Show backtrace section
+    if grep -q "=== BACKTRACE ===" "$GDB_LOG"; then
+        echo -e "${COLOR_BLUE}=== Full Backtrace with Local Variables ===${COLOR_RESET}"
+        sed -n '/=== BACKTRACE ===/,/=== REGISTERS ===/p' "$GDB_LOG" | head -100
+        echo ""
+    fi
+    
+    # Show register state
+    if grep -q "=== REGISTERS ===" "$GDB_LOG"; then
+        echo -e "${COLOR_BLUE}=== Register State ===${COLOR_RESET}"
+        sed -n '/=== REGISTERS ===/,/=== THREADS ===/p' "$GDB_LOG" | head -50
+        echo ""
+    fi
+    
+    # Show thread information
+    if grep -q "=== THREADS ===" "$GDB_LOG"; then
+        echo -e "${COLOR_BLUE}=== Thread Information ===${COLOR_RESET}"
+        sed -n '/=== THREADS ===/,$p' "$GDB_LOG" | head -100
+        echo ""
+    fi
+    
+    echo -e "${COLOR_GREEN}GDB artifacts analyzed successfully${COLOR_RESET}"
+    echo "Full GDB log: $GDB_LOG"
+    echo ""
+fi
+
 # Use fixed crash file location
 CRASH_FILE="/tmp/spotupnp-crash-latest.txt"
 
@@ -49,7 +90,16 @@ if [ $# -gt 0 ]; then
 fi
 
 if [ ! -f "$CRASH_FILE" ]; then
-    echo -e "${COLOR_YELLOW}No crash dump found: $CRASH_FILE${COLOR_RESET}"
+    echo -e "${COLOR_YELLOW}No custom crash dump found: $CRASH_FILE${COLOR_RESET}"
+    
+    # If we have GDB log, that's sufficient
+    if [ -f "$GDB_LOG" ]; then
+        echo "GDB crash artifacts already analyzed above (more detailed than crash handler)"
+        echo ""
+        # Skip the rest, GDB has everything we need
+        exit 0
+    fi
+    
     echo "Looking for crashes in dmesg..."
     echo ""
     
@@ -74,10 +124,11 @@ if [ ! -f "$CRASH_FILE" ]; then
 fi
 
 echo -e "Analyzing: ${COLOR_GREEN}$CRASH_FILE${COLOR_RESET}"
+echo -e "${COLOR_BLUE}(Custom crash handler output - GDB provides more detail above)${COLOR_RESET}"
 echo ""
 
 # Display crash info
-echo -e "${COLOR_YELLOW}=== Crash Information ===${COLOR_RESET}"
+echo -e "${COLOR_YELLOW}=== Crash Handler Output ===${COLOR_RESET}"
 head -20 "$CRASH_FILE"
 echo ""
 
@@ -192,41 +243,37 @@ echo -e "${COLOR_YELLOW}=== Core Dump Status ===${COLOR_RESET}"
 CORE_PATTERN=$(cat /proc/sys/kernel/core_pattern 2>/dev/null || echo "unknown")
 echo "Core pattern: $CORE_PATTERN"
 
-ULIMIT_CORE=$(ulimit -c)
-if [ "$ULIMIT_CORE" = "0" ]; then
-    echo -e "${COLOR_RED}Core dumps are DISABLED (ulimit -c = 0)${COLOR_RESET}"
-    echo "To enable: ulimit -c unlimited"
+# Note: build.sh sets ulimit when launching the process, so don't check current shell's ulimit
+# Instead, look for actual core files
+if [[ "$CORE_PATTERN" == *"|"* ]]; then
+    echo "Note: Cores piped to crash handler (WSL): $(echo "$CORE_PATTERN" | cut -d'|' -f2 | awk '{print $1}')"
+fi
+
+# Look for core files in common locations
+CORE_FILES=$(find /tmp -maxdepth 1 \( -name "core.*" -o -name "core" -o -name "*spotupnp*.core" -o -name "wsl-core-*" \) -type f -mtime -1 2>/dev/null)
+
+if [ -n "$CORE_FILES" ]; then
+    echo -e "${COLOR_GREEN}Found recent core dumps:${COLOR_RESET}"
+    echo "$CORE_FILES" | while read -r core_file; do
+        size=$(ls -lh "$core_file" 2>/dev/null | awk '{print $5}')
+        mtime=$(stat -c '%y' "$core_file" 2>/dev/null | cut -d'.' -f1)
+        echo "  $core_file ($size, $mtime)"
+    done
+    echo ""
+    echo "To analyze with GDB:"
+    echo "  gdb $BINARY <core_file>"
+    echo "  (gdb) bt full"
 else
-    echo -e "${COLOR_GREEN}Core dumps are enabled (limit: $ULIMIT_CORE)${COLOR_RESET}"
-    
-    # Look for core files
-    CORE_FILES=$(find /tmp -name "core.*" -o -name "core.spotupnp*" 2>/dev/null | head -5)
-    if [ -n "$CORE_FILES" ]; then
-        echo ""
-        echo "Found core dumps:"
-        echo "$CORE_FILES"
-        echo ""
-        echo "To analyze with GDB:"
-        echo "  gdb $BINARY <core_file>"
-        echo "  (gdb) bt full"
-    fi
+    echo "No recent core dumps found in /tmp"
+    echo "Note: build.sh enables cores when launching (ulimit -c unlimited)"
 fi
 echo ""
 
 # Suggest next steps
 echo -e "${COLOR_BLUE}=== Next Steps ===${COLOR_RESET}"
-echo "1. Review the decoded stack trace above"
-echo "2. Check the crash dump file: $CRASH_FILE"
-echo "3. Review kernel log: dmesg | grep spotupnp"
-if [ "$ULIMIT_CORE" = "0" ]; then
-    echo "4. Enable core dumps: ulimit -c unlimited"
-fi
-echo ""
-echo "For detailed analysis with GDB:"
-echo "  gdb $BINARY"
-echo "  (gdb) run -x <config.xml>"
-echo "  (when it crashes)"
-echo "  (gdb) bt full"
-echo "  (gdb) info registers"
-echo "  (gdb) list"
+echo "1. Examine the source code at the crash location (see stack trace above)"
+echo "2. Check for similar patterns in logs:"
+echo "     grep -i 'error\|exception\|assert' ~/.spotconnect/spotupnp.log"
+echo "3. Fix the issue and test with: cd ~/dev/spotconnect/spotupnp/dev-run && ./build.sh"
+echo "   (Runs automatically under GDB with crash capture)"
 echo ""

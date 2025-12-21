@@ -441,15 +441,76 @@ if [[ -n "$BINARY_PATH" && -f "$BINARY_PATH" ]]; then
     echo "$BINARY_PATH" > "$BINARY_PATH_FILE"
 fi
 
+# Create GDB init file for automated crash analysis
+GDB_INIT="$SPOTCONNECT_DIR/.gdbinit"
+GDB_LOG="$SPOTCONNECT_DIR/gdb-crash.log"
+cat > "$GDB_INIT" << 'GDBEOF'
+# Auto-log crashes
+set logging file ~/.spotconnect/gdb-crash.log
+set logging overwrite on
+set logging redirect off
+set pagination off
+set print pretty on
+set print array on
+set print elements 20
+
+# Handle signals - let our crash handler run but also capture in GDB
+handle SIGSEGV nostop print pass
+handle SIGABRT nostop print pass
+handle SIGILL nostop print pass
+handle SIGFPE nostop print pass
+handle SIGBUS nostop print pass
+
+# Ignore common signals
+handle SIGPIPE nostop noprint pass
+handle SIGUSR1 nostop noprint pass
+handle SIGUSR2 nostop noprint pass
+
+# On any crash signal, log full backtrace
+define hook-stop
+  if $_siginfo
+    set logging enabled on
+    printf "\n=== GDB CRASH CAPTURE at %s ===\n", $_siginfo
+    printf "Signal: %d (%s)\n\n", $_siginfo.si_signo, $_siginfo
+    echo === BACKTRACE ===\n
+    bt full
+    echo \n=== REGISTERS ===\n
+    info registers
+    echo \n=== THREADS ===\n
+    info threads
+    thread apply all bt
+    set logging enabled off
+  end
+end
+GDBEOF
+
+echo "    Created GDB init file: $GDB_INIT"
+if [[ -f "$GDB_LOG" ]]; then
+    rm -f "$GDB_LOG"
+    echo "    Removed old GDB crash log"
+fi
+
 echo ""
 
 # Run updated version
-echo "==> Starting $BINARY_NAME..."
+echo "==> Starting $BINARY_NAME under GDB (development mode)..."
 echo "    Config: $CONFIG_FILE"
 echo "    Log file: $LOG_FILE (stdout + stderr)"
+echo "    GDB log: $GDB_LOG (crash artifacts)"
 echo "    Working directory: $(dirname "$BINARY_PATH")"
-echo "    Mode: Background (daemonized)"
+echo "    Mode: Foreground with GDB (for crash analysis)"
 echo ""
+echo "========================================"
+echo "GDB COMMANDS:"
+echo "  continue (c)     - Run the program"
+echo "  Ctrl+C           - Interrupt to set breakpoints"
+echo "  break file:line  - Set breakpoint"
+echo "  bt full          - Full backtrace"
+echo "  info threads     - Show all threads"
+echo "  quit (q)         - Exit GDB and stop program"
+echo ""
+echo "On crash: GDB captures full backtrace to $GDB_LOG"
+echo "Our crash handler also writes to /tmp/spotupnp-crash-latest.txt"
 echo "========================================"
 echo ""
 
@@ -479,22 +540,29 @@ fi
     echo ""
 } >> "$LOG_FILE"
 
-# Redirect both stdout and stderr to log file
-"./$BINARY_NAME" -z -x "$CONFIG_FILE" -f "$LOG_FILE" >> "$LOG_FILE" 2>&1
-
-# Give it a moment to start
-sleep 2
-
-# Check if process started successfully
-if pgrep -f "spotupnp-.*-static" > /dev/null; then
+# Run under GDB with automatic crash logging
+# Redirect output to log file while keeping GDB interactive
+exec 3>&1  # Save stdout for GDB interaction
+{
+    echo "Starting GDB session..."
+    echo "Type 'run' or 'r' to start the program"
     echo ""
-    echo "==> Process started successfully in background"
-    echo "    Binary: $BINARY_NAME"
-    echo "    View logs: tail -f $LOG_FILE"
-    echo "    Stop process: pkill -TERM -f 'spotupnp-.*-static'"
+} | tee -a "$LOG_FILE" >&3
+
+# Launch with GDB - runs in foreground for interactive debugging
+gdb -q -x "$GDB_INIT" \
+    -ex "set args -z -x $CONFIG_FILE -f $LOG_FILE" \
+    -ex "run" \
+    "./$BINARY_NAME" 2>&1 | tee -a "$LOG_FILE"
+
+GDB_EXIT_CODE=$?
+echo ""
+if [[ $GDB_EXIT_CODE -eq 0 ]]; then
+    echo "==> GDB session ended normally"
 else
-    echo ""
-    echo "ERROR: Process failed to start. Check log file:"
-    echo "       tail $LOG_FILE"
-    exit 1
+    echo "==> GDB session ended with code: $GDB_EXIT_CODE"
+    if [[ -f "$GDB_LOG" ]]; then
+        echo "    Crash artifacts saved to: $GDB_LOG"
+        echo "    Run './analyze-crash.sh' for analysis"
+    fi
 fi

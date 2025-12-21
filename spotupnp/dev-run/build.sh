@@ -498,19 +498,13 @@ echo "    Config: $CONFIG_FILE"
 echo "    Log file: $LOG_FILE (stdout + stderr)"
 echo "    GDB log: $GDB_LOG (crash artifacts)"
 echo "    Working directory: $(dirname "$BINARY_PATH")"
-echo "    Mode: Foreground with GDB (for crash analysis)"
+echo "    Mode: Auto-run under GDB (non-interactive)"
 echo ""
 echo "========================================"
-echo "GDB COMMANDS:"
-echo "  continue (c)     - Run the program"
-echo "  Ctrl+C           - Interrupt to set breakpoints"
-echo "  break file:line  - Set breakpoint"
-echo "  bt full          - Full backtrace"
-echo "  info threads     - Show all threads"
-echo "  quit (q)         - Exit GDB and stop program"
-echo ""
-echo "On crash: GDB captures full backtrace to $GDB_LOG"
-echo "Our crash handler also writes to /tmp/spotupnp-crash-latest.txt"
+echo "GDB will automatically:"
+echo "  - Run the program in background"
+echo "  - Capture crashes to $GDB_LOG"
+echo "  - Continue monitoring until program exits"
 echo "========================================"
 echo ""
 
@@ -541,28 +535,35 @@ fi
 } >> "$LOG_FILE"
 
 # Run under GDB with automatic crash logging
-# Redirect output to log file while keeping GDB interactive
-exec 3>&1  # Save stdout for GDB interaction
-{
-    echo "Starting GDB session..."
-    echo "Type 'run' or 'r' to start the program"
-    echo ""
-} | tee -a "$LOG_FILE" >&3
+echo "Starting program under GDB in background..."
+echo ""
 
-# Launch with GDB - runs in foreground for interactive debugging
-gdb -q -x "$GDB_INIT" \
+# Launch with GDB in batch mode, running in background
+# All output redirected to log file
+gdb -batch \
+    -x "$GDB_INIT" \
     -ex "set args -z -x $CONFIG_FILE -f $LOG_FILE" \
     -ex "run" \
-    "./$BINARY_NAME" 2>&1 | tee -a "$LOG_FILE"
+    "./$BINARY_NAME" >> "$LOG_FILE" 2>&1 &
 
-GDB_EXIT_CODE=$?
-echo ""
-if [[ $GDB_EXIT_CODE -eq 0 ]]; then
-    echo "==> GDB session ended normally"
+GDB_PID=$!
+
+# Give it a moment to start
+sleep 2
+
+# Check if the actual binary process is running (not just GDB wrapper)
+if pgrep -f "spotupnp-.*-static" > /dev/null; then
+    ACTUAL_PID=$(pgrep -f "spotupnp-.*-static")
+    echo "==> Program started successfully under GDB"
+    echo "    Process PID: $ACTUAL_PID"
+    echo "    GDB wrapper PID: $GDB_PID"
+    echo "    Logs: tail -f $LOG_FILE"
+    echo "    Stop: pkill -TERM -f 'spotupnp-.*-static'"
 else
-    echo "==> GDB session ended with code: $GDB_EXIT_CODE"
+    echo "==> ERROR: Program failed to start"
+    echo "    Check logs: tail $LOG_FILE"
     if [[ -f "$GDB_LOG" ]]; then
-        echo "    Crash artifacts saved to: $GDB_LOG"
-        echo "    Run './analyze-crash.sh' for analysis"
+        echo "    Crash log: $GDB_LOG"
     fi
+    exit 1
 fi

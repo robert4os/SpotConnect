@@ -186,34 +186,54 @@ fi
 
 echo ""
 
-# Check if the source code has been changed
-echo "==> Checking for source code changes..."
+# Check if the source code has been changed using git
+echo "==> Checking for source code changes via git..."
 cd "$BUILD_DIR"
 SOURCE_CHANGED=false
 
-# Calculate comprehensive hash including:
-# - src/ directory (our code)
-# - CMakeLists.txt (build config)
-# - build.sh (build script)
-# - cspot submodule commit (git rev-parse HEAD in submodule)
+# Function to get git state hash for a repository
+get_git_state_hash() {
+    local repo_path="$1"
+    local repo_name="$2"
+    
+    # Use -C to run git commands in the target directory without cd
+    local commit_hash=$(git -C "$repo_path" rev-parse HEAD 2>/dev/null || echo "no-commit")
+    
+    # Check for any uncommitted changes (staged or unstaged)
+    local has_changes=$(git -C "$repo_path" status --porcelain 2>/dev/null | wc -l)
+    
+    # If there are changes, include diff hash to detect what changed
+    local diff_hash=""
+    if [[ $has_changes -gt 0 ]]; then
+        # Hash of all changes (staged + unstaged)
+        diff_hash=$(git -C "$repo_path" diff HEAD 2>/dev/null | md5sum | awk '{print $1}')
+        echo "    $repo_name: $has_changes file(s) changed" >&2
+    fi
+    
+    # Combine: commit + change indicator + diff hash
+    echo "${repo_name}:${commit_hash}:${has_changes}:${diff_hash}"
+}
+
+# Find all git repositories in the spotconnect tree (deterministic order)
+# Start from the parent directory to catch everything
+SPOTCONNECT_ROOT="$(cd "$BUILD_DIR/.." && pwd)"
+
+# Calculate git state hash for all git repositories found
 CURRENT_SOURCE_HASH=""
 {
-    # Hash source files
-    if [[ -d "src" ]]; then
-        find src -type f \( -name "*.c" -o -name "*.cpp" -o -name "*.h" -o -name "*.hpp" \) -exec md5sum {} \; 2>/dev/null | sort
-    fi
+    # Find all .git directories, extract their parent paths, sort for determinism
+    find "$SPOTCONNECT_ROOT" -name ".git" -type d 2>/dev/null | while read git_dir; do
+        repo_path="$(dirname "$git_dir")"
+        # Create a relative name for display (relative to spotconnect root)
+        repo_name="$(realpath --relative-to="$SPOTCONNECT_ROOT" "$repo_path" 2>/dev/null || basename "$repo_path")"
+        echo "$repo_path|$repo_name"
+    done | sort | while IFS='|' read repo_path repo_name; do
+        get_git_state_hash "$repo_path" "$repo_name"
+    done
     
-    # Hash build configuration
-    [[ -f "CMakeLists.txt" ]] && md5sum CMakeLists.txt 2>/dev/null
-    [[ -f "build.sh" ]] && md5sum build.sh 2>/dev/null
+    # Include build script itself (in case it's modified but not committed)
+    [[ -f "$BUILD_DIR/dev-run/build.sh" ]] && md5sum "$BUILD_DIR/dev-run/build.sh" 2>/dev/null
     
-    # Hash cspot submodule commit (use what git expects, not what's checked out)
-    if [[ -d "../common/cspot" ]]; then
-        echo "cspot: $(cd .. && git ls-tree HEAD common/cspot | awk '{print $3}' 2>/dev/null)"
-    fi
-    
-    # Hash other critical dependencies
-    [[ -f "../common/cspot/CMakeLists.txt" ]] && md5sum ../common/cspot/CMakeLists.txt 2>/dev/null
 } | md5sum | awk '{print $1}' > /tmp/source_hash_calc.tmp
 
 CURRENT_SOURCE_HASH=$(cat /tmp/source_hash_calc.tmp)

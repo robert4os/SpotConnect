@@ -96,30 +96,41 @@ if [ ! -f "$CRASH_FILE" ]; then
     if [ -f "$GDB_LOG" ]; then
         echo "GDB crash artifacts already analyzed above (more detailed than crash handler)"
         echo ""
-        # Skip the rest, GDB has everything we need
-        exit 0
-    fi
-    
-    echo "Looking for crashes in dmesg..."
-    echo ""
-    
-    DMESG_OUT=$(dmesg | grep -i "spotupnp.*segfault\|spotupnp.*signal" | tail -5)
-    if [ -n "$DMESG_OUT" ]; then
-        echo -e "${COLOR_YELLOW}=== Recent crashes in kernel log ===${COLOR_RESET}"
-        echo "$DMESG_OUT"
+        # Continue to show logs at the end instead of exiting
+    else
+        echo "Looking for crashes in dmesg..."
         echo ""
         
-        # Extract address from most recent
-        LAST_CRASH=$(echo "$DMESG_OUT" | tail -1)
-        if echo "$LAST_CRASH" | grep -q "ip "; then
-            IP_ADDR=$(echo "$LAST_CRASH" | grep -oP 'ip \K[0-9a-f]+')
-            echo -e "${COLOR_GREEN}Attempting to decode crash address: 0x$IP_ADDR${COLOR_RESET}"
+        DMESG_OUT=$(dmesg | grep -i "spotupnp.*segfault\|spotupnp.*signal" | tail -5)
+        if [ -n "$DMESG_OUT" ]; then
+            echo -e "${COLOR_YELLOW}=== Recent crashes in kernel log ===${COLOR_RESET}"
+            echo "$DMESG_OUT"
             echo ""
-            addr2line -e "$BINARY" -f -C "0x$IP_ADDR" 2>/dev/null || echo "Could not decode (binary may be stripped)"
+            
+            # Extract address from most recent
+            LAST_CRASH=$(echo "$DMESG_OUT" | tail -1)
+            if echo "$LAST_CRASH" | grep -q "ip "; then
+                IP_ADDR=$(echo "$LAST_CRASH" | grep -oP 'ip \K[0-9a-f]+')
+                echo -e "${COLOR_GREEN}Attempting to decode crash address: 0x$IP_ADDR${COLOR_RESET}"
+                echo ""
+                addr2line -e "$BINARY" -f -C "0x$IP_ADDR" 2>/dev/null || echo "Could not decode (binary may be stripped)"
+            fi
+        else
+            echo "No crashes found in dmesg either"
         fi
-    else
-        echo "No crashes found in dmesg either"
+        echo ""
     fi
+    
+    # Show logs and exit
+    LOG_FILE="$SPOTCONNECT_DIR/spotupnp.log"
+    if [ -f "$LOG_FILE" ]; then
+        echo -e "${COLOR_YELLOW}=== Last 15 Lines of Application Log ===${COLOR_RESET}"
+        tail -15 "$LOG_FILE"
+        echo ""
+        echo "Full log: $LOG_FILE"
+        echo ""
+    fi
+    
     exit 0
 fi
 
@@ -277,3 +288,13 @@ echo "     grep -i 'error\|exception\|assert' ~/.spotconnect/spotupnp.log"
 echo "3. Fix the issue and test with: cd ~/dev/spotconnect/spotupnp/dev-run && ./build.sh"
 echo "   (Runs automatically under GDB with crash capture)"
 echo ""
+
+# Show last 15 lines of application log for context
+LOG_FILE="$SPOTCONNECT_DIR/spotupnp.log"
+if [ -f "$LOG_FILE" ]; then
+    echo -e "${COLOR_YELLOW}=== Last 15 Lines of Application Log ===${COLOR_RESET}"
+    tail -15 "$LOG_FILE"
+    echo ""
+    echo "Full log: $LOG_FILE"
+    echo ""
+fi

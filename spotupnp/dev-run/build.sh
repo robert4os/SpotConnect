@@ -191,7 +191,7 @@ echo "==> Checking for source code changes via git..."
 cd "$BUILD_DIR"
 SOURCE_CHANGED=false
 
-# Function to get git state hash for a repository
+# Function to get git state hash for a repository (silent, for hash calculation)
 get_git_state_hash() {
     local repo_path="$1"
     local repo_name="$2"
@@ -207,7 +207,6 @@ get_git_state_hash() {
     if [[ $has_changes -gt 0 ]]; then
         # Hash of all changes (staged + unstaged)
         diff_hash=$(git -C "$repo_path" diff HEAD 2>/dev/null | md5sum | awk '{print $1}')
-        echo "    $repo_name: $has_changes file(s) changed" >&2
     fi
     
     # Combine: commit + change indicator + diff hash
@@ -221,9 +220,9 @@ SPOTCONNECT_ROOT="$(cd "$BUILD_DIR/.." && pwd)"
 # Calculate git state hash for all git repositories found
 CURRENT_SOURCE_HASH=""
 {
-    # Find all .git directories, extract their parent paths, sort for determinism
-    find "$SPOTCONNECT_ROOT" -name ".git" -type d 2>/dev/null | while read git_dir; do
-        repo_path="$(dirname "$git_dir")"
+    # Find all .git markers (both directories for regular repos and files for submodules)
+    find "$SPOTCONNECT_ROOT" -name ".git" \( -type d -o -type f \) 2>/dev/null | while read git_marker; do
+        repo_path="$(dirname "$git_marker")"
         # Create a relative name for display (relative to spotconnect root)
         repo_name="$(realpath --relative-to="$SPOTCONNECT_ROOT" "$repo_path" 2>/dev/null || basename "$repo_path")"
         echo "$repo_path|$repo_name"
@@ -243,7 +242,16 @@ if [[ -f "$SOURCE_HASH_FILE" ]]; then
     PREVIOUS_SOURCE_HASH=$(cat "$SOURCE_HASH_FILE")
     
     if [[ "$CURRENT_SOURCE_HASH" != "$PREVIOUS_SOURCE_HASH" ]]; then
-        echo "    Source code changes detected"
+        # Show which repos have changes when rebuild is needed
+        find "$SPOTCONNECT_ROOT" -name ".git" \( -type d -o -type f \) 2>/dev/null | while read git_marker; do
+            repo_path="$(dirname "$git_marker")"
+            repo_name="$(realpath --relative-to="$SPOTCONNECT_ROOT" "$repo_path" 2>/dev/null || basename "$repo_path")"
+            has_changes=$(git -C "$repo_path" status --porcelain 2>/dev/null | wc -l)
+            if [[ $has_changes -gt 0 ]]; then
+                echo "    $repo_name: $has_changes file(s) changed"
+            fi
+        done
+        echo "    Source code changes detected - rebuild required"
         SOURCE_CHANGED=true
     else
         echo "    No source changes detected since last build"
@@ -312,7 +320,7 @@ if [[ "$PROCESS_RUNNING" == "true" && ("$SOMETHING_CHANGED" == "true" || "$RESTA
     pkill -TERM -f "spotupnp-.*-static" || true
     
     # Monitor log file for shutdown progress
-    MAX_WAIT=5
+    MAX_WAIT=10
     SHUTDOWN_COMPLETE=false
     echo "    Monitoring graceful shutdown (max $MAX_WAIT seconds)..."
     

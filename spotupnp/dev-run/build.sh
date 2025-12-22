@@ -9,6 +9,7 @@ LOG_FILE="$SPOTCONNECT_DIR/spotupnp.log"
 CONFIG_HASH_FILE="$SPOTCONNECT_DIR/.config_hash"
 SOURCE_HASH_FILE="$SPOTCONNECT_DIR/.source_hash"
 BINARY_PATH_FILE="$SPOTCONNECT_DIR/.binary_path"
+LOGTHIS_FILE="$BUILD_DIR/dev-run/logthis.log"
 CLEAN_BUILD=false
 RESTART=false
 
@@ -288,6 +289,7 @@ elif [[ "$SOMETHING_CHANGED" == "false" && "$PROCESS_RUNNING" == "true" ]]; then
     # Clear log file before exiting (process keeps running)
     echo "==> Clearing log file: $LOG_FILE"
     > "$LOG_FILE"
+    [[ -f "$LOGTHIS_FILE" ]] && rm "$LOGTHIS_FILE"
     echo ""
     
     echo "========================================="
@@ -554,6 +556,7 @@ fi
 # Clear log file right before starting (keeps same inode for tail -f compatibility)
 echo "    Clearing log file: $LOG_FILE"
 > "$LOG_FILE"
+[[ -f "$LOGTHIS_FILE" ]] && rm "$LOGTHIS_FILE"
 
 # Write banner to log file with clear separation from previous logs
 # Reset color before banner without visible text

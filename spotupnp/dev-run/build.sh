@@ -122,6 +122,7 @@ fi
 
 echo ""
 
+
 # Create spotconnect directory early to store hash file
 mkdir -p "$SPOTCONNECT_DIR"
 
@@ -284,6 +285,11 @@ if [[ "$RESTART" == "true" ]]; then
     # Continue to handle process killing and starting below
 elif [[ "$SOMETHING_CHANGED" == "false" && "$PROCESS_RUNNING" == "true" ]]; then
     # If nothing changed and process is running (and not restart), abort
+    # Clear log file before exiting (process keeps running)
+    echo "==> Clearing log file: $LOG_FILE"
+    > "$LOG_FILE"
+    echo ""
+    
     echo "========================================="
     echo "No action needed:"
     echo "  - Source code: unchanged"
@@ -544,6 +550,10 @@ if [[ "$PROCESS_RUNNING" == "true" && ("$SOMETHING_CHANGED" == "true" || "$RESTA
     sleep 0.5
     sync  # Force all buffered writes to disk
 fi
+
+# Clear log file right before starting (keeps same inode for tail -f compatibility)
+echo "    Clearing log file: $LOG_FILE"
+> "$LOG_FILE"
 
 # Write banner to log file with clear separation from previous logs
 # Reset color before banner without visible text

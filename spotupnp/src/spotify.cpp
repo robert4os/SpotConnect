@@ -346,7 +346,7 @@ void CSpotPlayer::trackHandler(std::string_view trackUnique) {
     case cspot::SpircHandler::EventType::PLAYBACK_START: {
         // TEST: Deliberate segfault to test GDB crash logging
         // TODO: REMOVE THIS AFTER TESTING
-        /* // manual counter: 2
+        /* // manual counter: 3
         static int playback_count = 0;
         if (++playback_count > 2) {  // Crash on 3rd playback start
             CSPOT_LOG(info, "[TEST] Triggering deliberate segfault for GDB test (playback #%d)", playback_count);

@@ -213,6 +213,112 @@ if [[ $WARN_COUNT -gt 0 && $WARN_COUNT -le 10 ]]; then
 fi
 echo ""
 
+# Rate limiting and retry analysis
+echo "=== RATE LIMITING & RETRIES ==="
+CDN_429=$(grep -c "CDN URL fetch failed: HTTP 429" "$LOG_FILE")
+CDN_401=$(grep -c "CDN URL fetch failed: HTTP 401" "$LOG_FILE")
+CDN_403=$(grep -c "CDN URL fetch failed: HTTP 403" "$LOG_FILE")
+CDN_FAILURES=$(grep -c "CDN URL fetch failed:" "$LOG_FILE")
+RETRY_AFTER=$(grep "Retry-After:" "$LOG_FILE" | tail -5)
+TRACK_FAILURES=$(grep -c "Track failed to load, skipping it" "$LOG_FILE")
+GAVE_UP=$(grep -c "Giving up after .* failures" "$LOG_FILE")
+RATE_LIMIT_WAITS=$(grep -c "Rate limiting: waiting .* seconds as requested" "$LOG_FILE")
+BACKOFF_WAITS=$(grep -c "Rate limiting: exponential backoff" "$LOG_FILE")
+WAIT_COMPLETE=$(grep -c "Rate limiting: wait complete, resuming" "$LOG_FILE")
+
+if [[ $CDN_FAILURES -gt 0 || $TRACK_FAILURES -gt 0 || $GAVE_UP -gt 0 ]]; then
+    echo "CDN failures:"
+    if [[ $CDN_429 -gt 0 ]]; then
+        echo -e "  ${YELLOW}⚠${NC} HTTP 429 (rate limiting): $CDN_429"
+    fi
+    if [[ $CDN_401 -gt 0 ]]; then
+        echo -e "  ${RED}✗${NC} HTTP 401 (unauthorized): $CDN_401"
+    fi
+    if [[ $CDN_403 -gt 0 ]]; then
+        echo -e "  ${RED}✗${NC} HTTP 403 (forbidden): $CDN_403"
+    fi
+    OTHER_FAILURES=$((CDN_FAILURES - CDN_429 - CDN_401 - CDN_403))
+    if [[ $OTHER_FAILURES -gt 0 ]]; then
+        echo "  Other CDN failures: $OTHER_FAILURES"
+    fi
+    
+    if [[ -n "$RETRY_AFTER" ]]; then
+        echo ""
+        echo "Recent Retry-After headers:"
+        echo "$RETRY_AFTER" | sed 's/.*Retry-After: /  Spotify requested: /g; s/ second.*/s delay/g'
+    fi
+    
+    echo ""
+    echo "Retry behavior:"
+    echo "  Track load failures: $TRACK_FAILURES"
+    echo "  Server-requested delays: $RATE_LIMIT_WAITS"
+    echo "  Exponential backoff delays: $BACKOFF_WAITS"
+    echo "  Completed delays: $WAIT_COMPLETE"
+    
+    if [[ $GAVE_UP -gt 0 ]]; then
+        echo ""
+        echo -e "  ${RED}✗${NC} Gave up retrying: $GAVE_UP times"
+        grep "Giving up after" "$LOG_FILE" | sed 's/.*Giving up/  /g'
+    fi
+    
+    # Show failure progression if available
+    FAILURE_PROGRESS=$(grep "failure #[0-9]*/[0-9]*" "$LOG_FILE" | tail -10)
+    if [[ -n "$FAILURE_PROGRESS" ]]; then
+        echo ""
+        echo "Recent failure progression:"
+        echo "$FAILURE_PROGRESS" | sed 's/.*failure #/  Attempt /g; s/).*/) -/g' | sed 's/.*\] //'
+    fi
+else
+    echo -e "${GREEN}✓${NC} No rate limiting or CDN failures detected"
+fi
+echo ""
+
+# Connection errors analysis
+echo "=== CONNECTION DIAGNOSTICS ==="
+AP_CONNECT_ERRORS=$(grep -c "AP connect error" "$LOG_FILE")
+DNS_FAILURES=$(grep -c "DNS lookup failed:" "$LOG_FILE")
+CONNECT_FAILURES=$(grep -c "All connection attempts failed" "$LOG_FILE")
+CONN_REFUSED=$(grep -c "Connection refused" "$LOG_FILE")
+CONN_TIMEOUT=$(grep -c "Connection timed out" "$LOG_FILE")
+
+if [[ $AP_CONNECT_ERRORS -gt 0 || $DNS_FAILURES -gt 0 || $CONNECT_FAILURES -gt 0 ]]; then
+    echo "Connection issues detected:"
+    if [[ $AP_CONNECT_ERRORS -gt 0 ]]; then
+        echo "  AP connection errors: $AP_CONNECT_ERRORS"
+    fi
+    if [[ $DNS_FAILURES -gt 0 ]]; then
+        echo -e "  ${RED}✗${NC} DNS lookup failures: $DNS_FAILURES"
+    fi
+    if [[ $CONNECT_FAILURES -gt 0 ]]; then
+        echo -e "  ${RED}✗${NC} Connection attempts exhausted: $CONNECT_FAILURES"
+    fi
+    if [[ $CONN_REFUSED -gt 0 ]]; then
+        echo "  Connection refused (errno 111): $CONN_REFUSED"
+    fi
+    if [[ $CONN_TIMEOUT -gt 0 ]]; then
+        echo "  Connection timed out (errno 110): $CONN_TIMEOUT"
+    fi
+    
+    # Show last AP connection attempt
+    LAST_AP=$(grep "Connecting to Spotify AP:" "$LOG_FILE" | tail -1)
+    if [[ -n "$LAST_AP" ]]; then
+        echo ""
+        echo "Last connection attempt:"
+        echo "  $(echo "$LAST_AP" | sed 's/.*Connecting to Spotify AP: //')"
+    fi
+    
+    # Show recent connection errors with details
+    RECENT_CONN_ERRORS=$(grep "connect() failed for\|DNS lookup failed:\|All connection attempts failed" "$LOG_FILE" | tail -3)
+    if [[ -n "$RECENT_CONN_ERRORS" ]]; then
+        echo ""
+        echo "Recent connection errors:"
+        echo "$RECENT_CONN_ERRORS" | sed 's/^/  /g'
+    fi
+else
+    echo -e "${GREEN}✓${NC} No connection issues detected"
+fi
+echo ""
+
 # Performance metrics
 echo "=== PERFORMANCE ==="
 RATE_LOGS=$(grep "\[RATE-LIMIT\] Progress:" "$LOG_FILE" | tail -1)

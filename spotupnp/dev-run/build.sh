@@ -232,20 +232,28 @@ if [[ -f "$SOURCE_HASH_FILE" ]]; then
         
         if [[ -f "$PREV_STATE_FILE" ]]; then
             # Show only NEW changes (files that are new or have different content hash)
-            echo "    New changes since last build:"
-            comm -13 "$PREV_STATE_FILE" "$CURR_STATE_FILE" | while IFS='|' read repo_name status file git_hash; do
-                echo "      [$repo_name] $status $file"
-            done
+            NEW_CHANGES=$(comm -13 "$PREV_STATE_FILE" "$CURR_STATE_FILE")
+            if [[ -n "$NEW_CHANGES" ]]; then
+                echo "    New changes since last build:"
+                echo "$NEW_CHANGES" | while IFS='|' read repo_name status file git_hash; do
+                    echo "      [$repo_name] $status $file"
+                done
+                echo "    Source code changes detected - rebuild required"
+                SOURCE_CHANGED=true
+            else
+                # Hash changed but no new changes - likely due to commits
+                echo "    Git state changed (files committed/reverted) but no new code changes"
+                echo "    No rebuild required"
+            fi
         else
             # First build with changes - show all modified files
             echo "    All uncommitted changes:"
             cat "$CURR_STATE_FILE" | while IFS='|' read repo_name status file git_hash; do
                 echo "      [$repo_name] $status $file"
             done
+            echo "    Source code changes detected - rebuild required"
+            SOURCE_CHANGED=true
         fi
-        
-        echo "    Source code changes detected - rebuild required"
-        SOURCE_CHANGED=true
     else
         echo "    No source changes detected since last build"
     fi

@@ -683,15 +683,19 @@ echo "    Clearing log file: $LOG_FILE"
 } >> "$LOG_FILE"
 
 # Run under GDB - commands after run only execute if program stops abnormally
-echo "Starting program under GDB in background..."
-echo ""
+echo "    Starting program under GDB in background..."
 
-gdb -q -x "$GDB_COMMANDS" "./$BINARY_NAME" >> "$LOG_FILE" 2>&1 &
+# Enable unbuffered logging for development (forces fflush after each log line)
+export CSPOT_UNBUFFERED=1
+
+# Disable shell buffering: -i0 = unbuffered stdin, -o0 = unbuffered stdout, -e0 = unbuffered stderr
+stdbuf -i0 -o0 -e0 gdb -q -x "$GDB_COMMANDS" "./$BINARY_NAME" >> "$LOG_FILE" 2>&1 &
 
 GDB_PID=$!
 
 # Give it a moment to start
 sleep 2
+echo ""
 
 # Check if the actual binary process is running (not just GDB wrapper)
 if pgrep -f "spotupnp-.*-static" > /dev/null; then
@@ -699,6 +703,8 @@ if pgrep -f "spotupnp-.*-static" > /dev/null; then
     echo "==> Program started successfully under GDB"
     echo "    Process PID: $ACTUAL_PID"
     echo "    GDB wrapper PID: $GDB_PID"
+    echo ""
+    echo "==> Monitoring"
     echo "    Logs: tail -f $LOG_FILE"
     echo "    Stop: pkill -TERM -f 'spotupnp-.*-static'"
 else

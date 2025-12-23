@@ -206,6 +206,34 @@ if [[ $NUM_CLIENTS -gt 0 ]]; then
     grep "Spotify client launched for" "$LOG_FILE" | sed 's/.*launched for /  - /g'
 fi
 
+# Authentication method analysis
+USERPASS_AUTH=$(grep -c "Using USER_PASS authentication" "$LOG_FILE")
+STORED_AUTH=$(grep -c "Using STORED credentials" "$LOG_FILE")
+ZEROCONF_AUTH=$(grep -c "Using ZEROCONF authentication" "$LOG_FILE")
+
+if [[ $((USERPASS_AUTH + STORED_AUTH + ZEROCONF_AUTH)) -gt 0 ]]; then
+    echo ""
+    echo "Authentication methods used:"
+    [[ $USERPASS_AUTH -gt 0 ]] && echo "  USER_PASS (type 0): $USERPASS_AUTH times"
+    [[ $STORED_AUTH -gt 0 ]] && echo "  STORED credentials (type 1+): $STORED_AUTH times"
+    [[ $ZEROCONF_AUTH -gt 0 ]] && echo "  ZEROCONF: $ZEROCONF_AUTH times"
+fi
+
+# Show canonical usernames and credential types
+CANONICAL_USERS=$(grep "Authorization successful for user:" "$LOG_FILE" | tail -5)
+if [[ -n "$CANONICAL_USERS" ]]; then
+    echo ""
+    echo "Recent successful authentications:"
+    grep "Authorization successful for user:" "$LOG_FILE" | tail -5 | while read line; do
+        echo "  $line" | sed 's/.*for user: /User: /g'
+        # Get the next 2 lines for account/credential types
+        LINE_NUM=$(grep -n "Authorization successful for user:" "$LOG_FILE" | tail -5 | head -1 | cut -d: -f1)
+        if [[ -n "$LINE_NUM" ]]; then
+            sed -n "$((LINE_NUM+1)),$((LINE_NUM+2))p" "$LOG_FILE" | sed 's/^/    /g'
+        fi
+    done
+fi
+
 echo ""
 echo "Access token activity:"
 echo "  Token fetch attempts: $TOKEN_FETCHES"

@@ -12,6 +12,7 @@ BINARY_PATH_FILE="$SPOTCONNECT_DIR/.binary_path"
 LOGTHIS_FILE="$BUILD_DIR/dev-run/logthis.log"
 CLEAN_BUILD=false
 RESTART=false
+KILL_ONLY=false
 
 # Enable core dumps for development/debugging
 ulimit -c unlimited
@@ -28,21 +29,27 @@ while [[ $# -gt 0 ]]; do
             RESTART=true
             shift
             ;;
+        --kill)
+            KILL_ONLY=true
+            shift
+            ;;
         --platform)
             PLATFORM="$2"
             shift 2
             ;;
         *)
             echo "ERROR: Unknown argument: $1"
-            echo "Usage: $0 [--platform <arch>] [--clean] [--restart]"
+            echo "Usage: $0 [--platform <arch>] [--clean] [--restart] [--kill]"
             echo "  --platform <arch> : Target platform architecture (default: x86_64)"
             echo "  --clean           : Perform clean build (removes build directory)"
             echo "  --restart         : Restart process regardless of changes"
+            echo "  --kill            : Only kill the current binary (no build/restart)"
             echo ""
             echo "Examples:"
             echo "  $0                        # Use default platform (x86_64)"
             echo "  $0 --platform armv7       # Build for ARM v7"
             echo "  $0 --clean --restart      # Clean build and restart"
+            echo "  $0 --kill                 # Just kill the running process"
             exit 1
             ;;
     esac
@@ -122,6 +129,73 @@ if [[ "$PROCESS_RUNNING" == "false" ]]; then
 fi
 
 echo ""
+
+# Handle --kill argument
+if [[ "$KILL_ONLY" == "true" ]]; then
+    if [[ "$PROCESS_RUNNING" == "false" ]]; then
+        echo "==> No process to kill"
+        exit 0
+    fi
+    
+    echo "==> Killing spotupnp process..."
+    
+    # Get initial log size/position
+    if [[ -f "$LOG_FILE" ]]; then
+        INITIAL_LOG_SIZE=$(wc -l < "$LOG_FILE" 2>/dev/null || echo "0")
+    else
+        INITIAL_LOG_SIZE=0
+    fi
+    
+    pkill -TERM -f "spotupnp-.*-static" || true
+    
+    # Monitor log file for shutdown progress
+    MAX_WAIT=10
+    SHUTDOWN_COMPLETE=false
+    echo "    Monitoring graceful shutdown (max $MAX_WAIT seconds)..."
+    
+    for i in $(seq 1 $MAX_WAIT); do
+        # Check if process is still running
+        if ! pgrep -f "spotupnp-.*-static" > /dev/null; then
+            echo "    Process stopped"
+            SHUTDOWN_COMPLETE=true
+            break
+        fi
+        
+        # Check log file for shutdown completion marker
+        if [[ -f "$LOG_FILE" ]]; then
+            # Look for the final shutdown message
+            if tail -n 20 "$LOG_FILE" 2>/dev/null | grep -q "terminate main thread"; then
+                echo "    Clean shutdown sequence completed"
+                # Wait a moment for process to actually exit
+                sleep 0.5
+                if ! pgrep -f "spotupnp-.*-static" > /dev/null; then
+                    SHUTDOWN_COMPLETE=true
+                    break
+                fi
+            # Check for shutdown activity
+            elif tail -n 10 "$LOG_FILE" 2>/dev/null | grep -q -i "Stop:\|terminate.*thread\|flush renderers\|player thread exited\|deletion pending"; then
+                echo "    Shutdown in progress..."
+            fi
+        fi
+        
+        sleep 1
+    done
+    
+    # Force kill if still running
+    if ! pgrep -f "spotupnp-.*-static" > /dev/null; then
+        if [[ "$SHUTDOWN_COMPLETE" == "true" ]]; then
+            echo "    Process shut down cleanly"
+        fi
+    else
+        echo "    Process still running, sending SIGKILL..."
+        pkill -KILL -f "spotupnp-.*-static" || true
+        sleep 1
+        echo "    Process forcefully terminated"
+    fi
+    
+    echo "==> Done"
+    exit 0
+fi
 
 
 # Create spotconnect directory early to store hash file

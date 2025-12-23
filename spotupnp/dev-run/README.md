@@ -2,7 +2,33 @@
 
 This directory contains tools for rapid development iteration of the SpotConnect UPnP component.
 
-## Overview
+## Quick Reference
+
+### Shell Scripts
+
+| Script | Purpose | Usage |
+|--------|---------|-------|
+| `build.sh` | Build and run with change detection | `./build.sh [--platform x86_64] [--clean] [--restart]` |
+| `logthis.sh` | Log management and analysis | `./logthis.sh [0\|1\|2]` |
+| `analyze-log.sh` | Comprehensive log analysis | `./analyze-log.sh --file <log> --config <xml>` |
+| `analyze-crash.sh` | Decode crash dumps | `./analyze-crash.sh` |
+
+### Common Workflows
+
+```bash
+# Development cycle
+./build.sh                  # Build if changed, start if needed
+./logthis.sh 1              # Snapshot current log to clipboard
+./logthis.sh 2              # Full analysis with SPIRC debugging
+
+# After crash
+./analyze-crash.sh          # Decode addresses to source locations
+cat ~/.spotconnect/gdb-crash.log  # Full GDB backtrace
+```
+
+---
+
+## build.sh - Intelligent Build & Run
 
 The `build.sh` script provides an intelligent, automated development workflow that:
 - Detects source code and configuration changes
@@ -253,6 +279,205 @@ The script uses Git to detect source changes. Make sure:
 - You're in a Git repository
 - Changes are visible to `git diff`
 - Use `--clean` to force rebuild regardless
+
+---
+
+## logthis.sh - Log Management Interface
+
+Unified log management tool with three modes of operation.
+
+### Usage
+
+```bash
+./logthis.sh 0    # Reset: Clear both log files
+./logthis.sh 1    # Snapshot: Copy log to clipboard and save to logthis.log
+./logthis.sh 2    # Analyze: Run comprehensive analysis with auto-detected config
+```
+
+### Features
+
+**Option 0 - Reset**:
+- Clears `~/.spotconnect/spotupnp.log` (main log)
+- Removes `dev-run/logthis.log` (analysis snapshot)
+- Use before starting a new experiment
+
+**Option 1 - Snapshot**:
+- Strips ANSI color codes for clean viewing
+- Copies to system clipboard (requires `xclip`)
+- Saves to `dev-run/logthis.log` for persistent analysis
+- Preserves original log file
+
+**Option 2 - Analyze**:
+- Runs `analyze-log.sh` with auto-detected config
+- Provides comprehensive playback analysis
+- Includes SPIRC protocol debugging
+- Shows flow mode behavior and efficiency
+
+### Log Locations
+
+- **Main log**: `~/.spotconnect/spotupnp.log` (live, active log)
+- **Snapshot**: `dev-run/logthis.log` (cleaned, for analysis)
+- **Config**: `dev-run/config.xml` (auto-detected)
+
+---
+
+## analyze-log.sh - Comprehensive Log Analysis
+
+Analyzes spotupnp logs and extracts playback metrics, configuration consistency, and SPIRC protocol behavior.
+
+### Usage
+
+```bash
+# Auto-detect log and config
+./analyze-log.sh
+
+# Specify files explicitly
+./analyze-log.sh --file <log> --config <config.xml>
+
+# Analyze specific log
+./analyze-log.sh --file /path/to/spotupnp.log
+
+# Legacy format (positional argument)
+./analyze-log.sh /path/to/spotupnp.log
+```
+
+### Analysis Sections
+
+1. **Configuration Display**: Shows all config.xml settings at the top
+2. **Session Info**: Binary version, startup time, device name
+3. **Track Playback**: Complete list of tracks played with numbering
+4. **Flow Mode Status**: FLOW_ACTIVE vs DISCRETE_MODE detection with HTTP port analysis
+5. **Rate Limiting**: Efficiency percentages, expected vs actual timing
+6. **Repeat Mode**: Loop detection with iteration count
+7. **Errors & Warnings**: Count and recent entries with color coding
+8. **Performance**: Latest rate limit status, seek operations
+9. **Configuration Analysis**: Codec, bitrate, flow mode consistency checks
+10. **Session Boundaries**: Session start/end markers
+11. **SPIRC Protocol Analysis**: Frame types, PLAYBACK_START triggers, Load vs queued tracks
+12. **Summary Statistics**: Tracks, mode, quality, efficiency, config status
+
+### Color Coding
+
+- **GREEN (✓)**: Success, OK, matches expected
+- **YELLOW (⚠)**: Warning, mismatch, attention needed
+- **RED (✗)**: Error, failed, problem detected
+- **BLUE (ℹ)**: Information, pattern detected
+
+### SPIRC Analysis Features
+
+The analysis includes detailed SPIRC protocol debugging:
+- **Frame counts**: Load, Notify, Play, Pause frames
+- **Pattern detection**: Identifies single Load frame + queued tracks
+- **Trigger details**: Shows what initiated each PLAYBACK_START
+  - "Initiated by Spotify Load frame" = Spotify client command
+  - "Auto-loaded from queue" = Internal queue mechanism
+- **Track IDs**: Shows partial track ID for queued tracks
+
+Example output:
+```
+=== SPIRC PROTOCOL ANALYSIS ===
+Frame types received from Spotify:
+  Load frames: 1
+  Notify frames: 93
+
+PLAYBACK_START event analysis:
+  Total PLAYBACK_START events: 3
+  Total Load frames: 1
+  ℹ Pattern detected: 1 Load frame initiated session, 2 subsequent tracks auto-loaded from queue
+
+Trigger details:
+  Track 1: Initiated by Spotify Load frame
+  Track 2: Auto-loaded from queue (trackId: e9900573d462...)
+  Track 3: Auto-loaded from queue (trackId: bbe590aaab20...)
+```
+
+### Configuration Consistency Checks
+
+- **Codec**: Compares config.xml codec with detected Content-Type
+- **Bitrate**: Compares vorbis_rate with detected bitrate
+- **Flow mode**: Compares config flow setting with actual behavior
+- **Gapless**: Notes if gapless is enabled without flow mode
+
+---
+
+## analyze-crash.sh - Crash Dump Decoder
+
+Decodes crash dumps and provides debugging information.
+
+### Usage
+
+```bash
+# Analyze latest crash
+./analyze-crash.sh
+
+# Auto-detects:
+# - /tmp/spotupnp-crash-latest.txt (crash dump)
+# - ~/.spotconnect/.binary_path (binary location)
+```
+
+### Features
+
+- Decodes raw memory addresses to source file:line
+- Uses `addr2line` with the actual binary
+- Shows function names and exact crash locations
+- Displays full stack trace with source attribution
+- Provides GDB debugging instructions
+
+### Output
+
+The script shows:
+1. Crash signal and fault address
+2. Full backtrace with decoded addresses
+3. Source file locations (e.g., `spotify.cpp:218`)
+4. Function names
+5. Instructions for further debugging
+
+### GDB Integration
+
+The program runs under GDB when started via `build.sh`, which creates:
+- `~/.spotconnect/gdb-crash.log` - Full GDB backtrace with locals, registers, threads
+- `~/.spotconnect/.gdbinit` - GDB configuration for crash capture
+
+After a crash:
+```bash
+# View simple decoded backtrace
+./analyze-crash.sh
+
+# View full GDB capture with locals and registers
+cat ~/.spotconnect/gdb-crash.log
+```
+
+### Manual GDB Analysis
+
+For deeper debugging:
+```bash
+# If core dump exists
+gdb path/to/spotupnp-linux-x86_64-static core.*
+
+# Within GDB
+(gdb) bt full              # Full backtrace with local variables
+(gdb) info threads         # All thread states
+(gdb) thread apply all bt  # Backtrace of all threads
+(gdb) frame N              # Switch to specific frame
+(gdb) info locals          # Local variables in current frame
+(gdb) p variable           # Print specific variable
+```
+
+---
+
+## Files in dev-run/
+
+| File | Purpose | Created By |
+|------|---------|------------|
+| `build.sh` | Build and run script | Manual |
+| `logthis.sh` | Log management | Manual |
+| `analyze-log.sh` | Log analysis | Manual |
+| `analyze-crash.sh` | Crash decoder | Manual |
+| `config.xml` | Local device config | `build.sh` (first run) |
+| `logthis.log` | Log snapshot | `logthis.sh 1` |
+| `README.md` | This file | Manual |
+
+---
 
 ## Best Practices
 

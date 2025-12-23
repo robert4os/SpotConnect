@@ -193,66 +193,57 @@ echo "==> Checking for source code changes via git..."
 cd "$BUILD_DIR"
 SOURCE_CHANGED=false
 
-# Function to get git state hash for a repository (silent, for hash calculation)
-get_git_state_hash() {
-    local repo_path="$1"
-    local repo_name="$2"
-    
-    # Use -C to run git commands in the target directory without cd
-    local commit_hash=$(git -C "$repo_path" rev-parse HEAD 2>/dev/null || echo "no-commit")
-    
-    # Check for any uncommitted changes (staged or unstaged)
-    local has_changes=$(git -C "$repo_path" status --porcelain 2>/dev/null | wc -l)
-    
-    # If there are changes, include diff hash to detect what changed
-    local diff_hash=""
-    if [[ $has_changes -gt 0 ]]; then
-        # Hash of all changes (staged + unstaged)
-        diff_hash=$(git -C "$repo_path" diff HEAD 2>/dev/null | md5sum | awk '{print $1}')
-    fi
-    
-    # Combine: commit + change indicator + diff hash
-    echo "${repo_name}:${commit_hash}:${has_changes}:${diff_hash}"
-}
-
 # Find all git repositories in the spotconnect tree (deterministic order)
-# Start from the parent directory to catch everything
 SPOTCONNECT_ROOT="$(cd "$BUILD_DIR/.." && pwd)"
+CURR_STATE_FILE="$SPOTCONNECT_DIR/.curr_git_state"
 
-# Calculate git state hash for all git repositories found
-CURRENT_SOURCE_HASH=""
+# Build a sorted list of all modified files with their git hash
+# Format: repo_name|status|filepath|git_hash
 {
-    # Find all .git markers (both directories for regular repos and files for submodules)
     find "$SPOTCONNECT_ROOT" -name ".git" \( -type d -o -type f \) 2>/dev/null | while read git_marker; do
         repo_path="$(dirname "$git_marker")"
-        # Create a relative name for display (relative to spotconnect root)
         repo_name="$(realpath --relative-to="$SPOTCONNECT_ROOT" "$repo_path" 2>/dev/null || basename "$repo_path")"
-        echo "$repo_path|$repo_name"
-    done | sort | while IFS='|' read repo_path repo_name; do
-        get_git_state_hash "$repo_path" "$repo_name"
+        
+        # Get all modified files (staged and unstaged), excluding dev-run
+        git -C "$repo_path" status --porcelain 2>/dev/null | grep -v "dev-run/" | while read status file; do
+            # For existing files, get git's content hash; for deleted/new, use special markers
+            file_path="$repo_path/$file"
+            if [[ -f "$file_path" ]]; then
+                # Use git hash-object to get deterministic content hash
+                git_hash=$(git -C "$repo_path" hash-object "$file" 2>/dev/null || echo "error")
+            elif [[ "$status" == "D"* ]]; then
+                git_hash="deleted"
+            else
+                git_hash="new"
+            fi
+            echo "$repo_name|$status|$file|$git_hash"
+        done
     done
-    
-    # Include build script itself (in case it's modified but not committed)
-    [[ -f "$BUILD_DIR/dev-run/build.sh" ]] && md5sum "$BUILD_DIR/dev-run/build.sh" 2>/dev/null
-    
-} | md5sum | awk '{print $1}' > /tmp/source_hash_calc.tmp
+} | sort > "$CURR_STATE_FILE"
 
-CURRENT_SOURCE_HASH=$(cat /tmp/source_hash_calc.tmp)
-rm -f /tmp/source_hash_calc.tmp
+# Calculate overall hash from all modified files
+CURRENT_SOURCE_HASH=$(cat "$CURR_STATE_FILE" | md5sum | awk '{print $1}')
 
 if [[ -f "$SOURCE_HASH_FILE" ]]; then
     PREVIOUS_SOURCE_HASH=$(cat "$SOURCE_HASH_FILE")
     
     if [[ "$CURRENT_SOURCE_HASH" != "$PREVIOUS_SOURCE_HASH" ]]; then
-        # Show which repos have changes when rebuild is needed
-        find "$SPOTCONNECT_ROOT" -name ".git" \( -type d -o -type f \) 2>/dev/null | while read git_marker; do
-            repo_path="$(dirname "$git_marker")"
-            repo_name="$(realpath --relative-to="$SPOTCONNECT_ROOT" "$repo_path" 2>/dev/null || basename "$repo_path")"
-            has_changes=$(git -C "$repo_path" status --porcelain 2>/dev/null | wc -l)
-            if [[ $has_changes -gt 0 ]]; then
-                echo "    $repo_name: $has_changes file(s) changed"
-            fi
-        done
+        PREV_STATE_FILE="$SPOTCONNECT_DIR/.prev_git_state"
+        
+        if [[ -f "$PREV_STATE_FILE" ]]; then
+            # Show only NEW changes (files that are new or have different content hash)
+            echo "    New changes since last build:"
+            comm -13 "$PREV_STATE_FILE" "$CURR_STATE_FILE" | while IFS='|' read repo_name status file git_hash; do
+                echo "      [$repo_name] $status $file"
+            done
+        else
+            # First build with changes - show all modified files
+            echo "    All uncommitted changes:"
+            cat "$CURR_STATE_FILE" | while IFS='|' read repo_name status file git_hash; do
+                echo "      [$repo_name] $status $file"
+            done
+        fi
+        
         echo "    Source code changes detected - rebuild required"
         SOURCE_CHANGED=true
     else
@@ -262,7 +253,7 @@ else
     echo "    First build - no previous source hash found"
     SOURCE_CHANGED=true
 fi
-
+# v2
 echo ""
 
 # Check if binary exists
@@ -470,6 +461,13 @@ fi
 if [[ -n "$CURRENT_SOURCE_HASH" ]]; then
     echo "$CURRENT_SOURCE_HASH" > "$SOURCE_HASH_FILE"
     echo "    Saved source hash for next comparison"
+    
+    # Also save the current git state for incremental change detection
+    CURR_STATE_FILE="$SPOTCONNECT_DIR/.curr_git_state"
+    PREV_STATE_FILE="$SPOTCONNECT_DIR/.prev_git_state"
+    if [[ -f "$CURR_STATE_FILE" ]]; then
+        mv "$CURR_STATE_FILE" "$PREV_STATE_FILE"
+    fi
 fi
 
 # Save binary path for crash analysis tools
@@ -477,50 +475,85 @@ if [[ -n "$BINARY_PATH" && -f "$BINARY_PATH" ]]; then
     echo "$BINARY_PATH" > "$BINARY_PATH_FILE"
 fi
 
-# Create GDB init file for automated crash analysis
-GDB_INIT="$SPOTCONNECT_DIR/.gdbinit"
 GDB_LOG="$SPOTCONNECT_DIR/gdb-crash.log"
-cat > "$GDB_INIT" << 'GDBEOF'
-# Auto-log crashes
+GDB_COMMANDS="$SPOTCONNECT_DIR/.gdb-commands"
+
+# Create command file that loops waiting for crashes
+cat > "$GDB_COMMANDS" << 'GDBCMD'
+set pagination off
+set confirm off
+set print pretty on
 set logging file ~/.spotconnect/gdb-crash.log
 set logging overwrite on
-set logging redirect off
-set pagination off
-set print pretty on
-set print array on
-set print elements 20
 
-# Handle signals - let our crash handler run but also capture in GDB
-handle SIGSEGV nostop print pass
-handle SIGABRT nostop print pass
-handle SIGILL nostop print pass
-handle SIGFPE nostop print pass
-handle SIGBUS nostop print pass
+# Suppress verbose GDB output
+set print thread-events off
+set print inferior-events off
 
-# Ignore common signals
+# Follow child process after fork (this is where the crash happens!)
+set follow-fork-mode child
+set detach-on-fork on
+
+handle SIGSEGV stop print nopass
+handle SIGABRT stop print nopass
+handle SIGILL stop print nopass
+handle SIGFPE stop print nopass
+handle SIGBUS stop print nopass
 handle SIGPIPE nostop noprint pass
-handle SIGUSR1 nostop noprint pass
-handle SIGUSR2 nostop noprint pass
 
-# On any crash signal, log full backtrace
-define hook-stop
-  if $_siginfo
-    set logging enabled on
-    printf "\n=== GDB CRASH CAPTURE at %s ===\n", $_siginfo
-    printf "Signal: %d (%s)\n\n", $_siginfo.si_signo, $_siginfo
-    echo === BACKTRACE ===\n
-    bt full
-    echo \n=== REGISTERS ===\n
-    info registers
-    echo \n=== THREADS ===\n
-    info threads
-    thread apply all bt
-    set logging enabled off
-  end
-end
-GDBEOF
+run -z -x $HOME/dev/spotconnect/spotupnp/dev-run/config.xml -f ~/.spotconnect/spotupnp.log
 
-echo "    Created GDB init file: $GDB_INIT"
+# If we reach here due to a signal, log it
+set logging enabled on
+
+echo \n================================================================================\n
+echo === CRASH DETECTED ===\n
+echo ================================================================================\n
+
+where
+
+echo \n=== BACKTRACE WITH LOCALS ===\n
+backtrace full
+
+echo \n=== FRAME INFO ===\n
+info frame
+info args
+info locals
+
+echo \n=== MEMORY AT CRASH SITE ===\n
+x/32xb \$rip
+x/8xg \$rsp
+
+echo \n=== HEAP INFO (if available) ===\n
+info proc mappings
+
+echo \n=== DETAILED FRAME ANALYSIS ===\n
+frame 0
+info frame
+info args
+info locals
+x/16xg \$rbp-64
+x/16xg \$rsp
+
+echo \n=== ALL THREADS ===\n
+info threads
+thread apply all backtrace
+
+echo \n=== REGISTERS ===\n
+info registers
+
+echo \n=== SHARED LIBRARIES ===\n
+info sharedlibrary
+
+echo \n=== TRY TO SAVE CORE DUMP ===\n
+generate-core-file ~/.spotconnect/core-crash
+
+echo \n================================================================================\n
+
+set logging enabled off
+quit
+GDBCMD
+
 if [[ -f "$GDB_LOG" ]]; then
     rm -f "$GDB_LOG"
     echo "    Removed old GDB crash log"
@@ -534,14 +567,7 @@ echo "    Config: $CONFIG_FILE"
 echo "    Log file: $LOG_FILE (stdout + stderr)"
 echo "    GDB log: $GDB_LOG (crash artifacts)"
 echo "    Working directory: $(dirname "$BINARY_PATH")"
-echo "    Mode: Auto-run under GDB (non-interactive)"
-echo ""
-echo "========================================"
-echo "GDB will automatically:"
-echo "  - Run the program in background"
-echo "  - Capture crashes to $GDB_LOG"
-echo "  - Continue monitoring until program exits"
-echo "========================================"
+echo "    Mode: Auto-run under GDB with persistent connection"
 echo ""
 
 cd "$(dirname "$BINARY_PATH")"
@@ -559,7 +585,6 @@ echo "    Clearing log file: $LOG_FILE"
 [[ -f "$LOGTHIS_FILE" ]] && rm "$LOGTHIS_FILE"
 
 # Write banner to log file with clear separation from previous logs
-# Reset color before banner without visible text
 {
     echo -e "\033[0m"
     echo ""
@@ -575,17 +600,11 @@ echo "    Clearing log file: $LOG_FILE"
     echo ""
 } >> "$LOG_FILE"
 
-# Run under GDB with automatic crash logging
+# Run under GDB - commands after run only execute if program stops abnormally
 echo "Starting program under GDB in background..."
 echo ""
 
-# Launch with GDB in batch mode, running in background
-# All output redirected to log file
-gdb -batch \
-    -x "$GDB_INIT" \
-    -ex "set args -z -x $CONFIG_FILE -f $LOG_FILE" \
-    -ex "run" \
-    "./$BINARY_NAME" >> "$LOG_FILE" 2>&1 &
+gdb -q -x "$GDB_COMMANDS" "./$BINARY_NAME" >> "$LOG_FILE" 2>&1 &
 
 GDB_PID=$!
 

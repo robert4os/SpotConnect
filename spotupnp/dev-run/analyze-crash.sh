@@ -47,37 +47,42 @@ if [ -f "$GDB_LOG" ]; then
     echo -e "${COLOR_GREEN}Found GDB crash artifacts: $GDB_LOG${COLOR_RESET}"
     echo ""
     
-    echo -e "${COLOR_YELLOW}=== GDB Crash Capture ===${COLOR_RESET}"
+    # Extract key crash information for quick summary
+    echo -e "${COLOR_YELLOW}=== CRASH SUMMARY ===${COLOR_RESET}"
     
-    # Extract signal information
-    if grep -q "Signal:" "$GDB_LOG"; then
-        echo -e "${COLOR_RED}$(grep "Signal:" "$GDB_LOG")${COLOR_RESET}"
-        echo ""
+    # Extract crash location from first frame
+    CRASH_FUNC=$(grep "^#0 " "$GDB_LOG" | head -1 | awk '{print $3}')
+    CRASH_FILE=$(grep "at .*\.c.*:[0-9]" "$GDB_LOG" | head -1 | grep -oP 'at \K[^:]+')
+    CRASH_LINE=$(grep "at .*\.c.*:[0-9]" "$GDB_LOG" | head -1 | grep -oP ':\K[0-9]+')
+    
+    if [ -n "$CRASH_FUNC" ]; then
+        echo -e "Crash Function: ${COLOR_RED}$CRASH_FUNC${COLOR_RESET}"
+    fi
+    if [ -n "$CRASH_FILE" ] && [ -n "$CRASH_LINE" ]; then
+        echo -e "Crash Location: ${COLOR_RED}$CRASH_FILE:$CRASH_LINE${COLOR_RESET}"
     fi
     
-    # Show backtrace section
-    if grep -q "=== BACKTRACE ===" "$GDB_LOG"; then
-        echo -e "${COLOR_BLUE}=== Full Backtrace with Local Variables ===${COLOR_RESET}"
-        sed -n '/=== BACKTRACE ===/,/=== REGISTERS ===/p' "$GDB_LOG" | head -100
-        echo ""
+    # Extract signal type
+    SIGNAL=$(grep -oP "signal \K(SIGSEGV|SIGABRT|SIGILL|SIGFPE|SIGBUS)" "$GDB_LOG" | head -1)
+    if [ -n "$SIGNAL" ]; then
+        echo -e "Signal: ${COLOR_RED}$SIGNAL${COLOR_RESET}"
     fi
     
-    # Show register state
-    if grep -q "=== REGISTERS ===" "$GDB_LOG"; then
-        echo -e "${COLOR_BLUE}=== Register State ===${COLOR_RESET}"
-        sed -n '/=== REGISTERS ===/,/=== THREADS ===/p' "$GDB_LOG" | head -50
-        echo ""
+    # Check if it's a malloc/heap issue
+    if grep -q "malloc\|_int_malloc\|free" "$GDB_LOG"; then
+        echo -e "Issue Type: ${COLOR_RED}Heap/Memory Allocator${COLOR_RESET}"
     fi
     
-    # Show thread information
-    if grep -q "=== THREADS ===" "$GDB_LOG"; then
-        echo -e "${COLOR_BLUE}=== Thread Information ===${COLOR_RESET}"
-        sed -n '/=== THREADS ===/,$p' "$GDB_LOG" | head -100
-        echo ""
-    fi
+    echo ""
     
-    echo -e "${COLOR_GREEN}GDB artifacts analyzed successfully${COLOR_RESET}"
-    echo "Full GDB log: $GDB_LOG"
+    echo -e "${COLOR_YELLOW}=== Complete GDB Crash Capture ===${COLOR_RESET}"
+    echo ""
+    
+    # Display the entire GDB log
+    cat "$GDB_LOG"
+    
+    echo ""
+    echo -e "${COLOR_GREEN}GDB artifacts displayed (full log above)${COLOR_RESET}"
     echo ""
 fi
 

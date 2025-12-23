@@ -334,6 +334,68 @@ else
 fi
 echo ""
 
+# SPIRC Protocol Analysis
+echo "=== SPIRC PROTOCOL ANALYSIS ==="
+
+# Count frame types
+LOAD_FRAMES=$(grep -c "Load frame" "$LOG_FILE")
+NOTIFY_FRAMES=$(grep -c "Notify frame" "$LOG_FILE")
+PLAY_FRAMES=$(grep -c "Play frame" "$LOG_FILE")
+PAUSE_FRAMES=$(grep -c "Pause frame" "$LOG_FILE")
+
+echo "Frame types received from Spotify:"
+echo "  Load frames: $LOAD_FRAMES"
+echo "  Notify frames: $NOTIFY_FRAMES"
+if [[ $PLAY_FRAMES -gt 0 ]]; then
+    echo "  Play frames: $PLAY_FRAMES"
+fi
+if [[ $PAUSE_FRAMES -gt 0 ]]; then
+    echo "  Pause frames: $PAUSE_FRAMES"
+fi
+echo ""
+
+# Analyze PLAYBACK_START triggers
+if [[ $SESSION_STARTS -gt 0 ]]; then
+    echo "PLAYBACK_START event analysis:"
+    echo "  Total PLAYBACK_START events: $SESSION_STARTS"
+    echo "  Total Load frames: $LOAD_FRAMES"
+    
+    if [[ $LOAD_FRAMES -eq 1 && $SESSION_STARTS -gt 1 ]]; then
+        QUEUED_TRACKS=$((SESSION_STARTS - 1))
+        echo -e "  ${BLUE}ℹ${NC} Pattern detected: 1 Load frame initiated session, $QUEUED_TRACKS subsequent tracks auto-loaded from queue"
+    elif [[ $LOAD_FRAMES -eq $SESSION_STARTS ]]; then
+        echo -e "  ${BLUE}ℹ${NC} Each track was initiated by a separate Load frame (discrete mode)"
+    elif [[ $LOAD_FRAMES -gt 0 && $LOAD_FRAMES -lt $SESSION_STARTS ]]; then
+        echo -e "  ${BLUE}ℹ${NC} Mixed: $LOAD_FRAMES Load frames for $SESSION_STARTS tracks"
+    fi
+    
+    # Show what triggered each PLAYBACK_START
+    echo ""
+    echo "Trigger details:"
+    
+    # Get timestamps of PLAYBACK_START and check what happened before each
+    grep -n "========== PLAYBACK SESSION START ==========" "$LOG_FILE" | while IFS=: read -r line_num timestamp_line; do
+        # Extract track number from context
+        TRACK_NUM=$(grep -A2 "========== PLAYBACK SESSION START ==========" "$LOG_FILE" | grep "new track will start" | head -$((line_num/3+1)) | tail -1 | grep -oP 'start at \K[0-9]+')
+        
+        # Check for Load frame before this PLAYBACK_START
+        CONTEXT_BEFORE=$(sed -n "$((line_num - 10)),$((line_num - 1))p" "$LOG_FILE" 2>/dev/null)
+        
+        if echo "$CONTEXT_BEFORE" | grep -q "Load frame"; then
+            LOAD_INFO=$(echo "$CONTEXT_BEFORE" | grep "Load frame" | tail -1)
+            echo -e "  Track $((line_num/3+1)): ${GREEN}Initiated by Spotify Load frame${NC}"
+        elif echo "$CONTEXT_BEFORE" | grep -q "Got track ID="; then
+            TRACK_ID=$(echo "$CONTEXT_BEFORE" | grep "Got track ID=" | tail -1 | grep -oP 'ID=\K[a-f0-9]+')
+            echo -e "  Track $((line_num/3+1)): ${YELLOW}Auto-loaded from queue${NC} (trackId: ${TRACK_ID:0:12}...)"
+        elif echo "$CONTEXT_BEFORE" | grep -q "Opening HTTP stream"; then
+            echo -e "  Track $((line_num/3+1)): ${YELLOW}Auto-loaded from queue${NC} (CDN stream opened)"
+        else
+            echo -e "  Track $((line_num/3+1)): ${YELLOW}Queued track${NC}"
+        fi
+    done
+fi
+echo ""
+
 # Summary statistics
 echo "=== SUMMARY STATISTICS ==="
 echo "Playback:"

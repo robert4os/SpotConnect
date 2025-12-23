@@ -193,6 +193,47 @@ else
 fi
 echo ""
 
+# Authentication and token analysis
+echo "=== AUTHENTICATION & TOKENS ==="
+NUM_CLIENTS=$(grep -c "Spotify client launched for" "$LOG_FILE")
+TOKEN_FETCHES=$(grep -c "Access token expired, fetching new one" "$LOG_FILE")
+TOKEN_SUCCESS=$(grep -c "Access token fetched successfully" "$LOG_FILE")
+TOKEN_FAILURES=$(grep -c "Access token fetch failed:" "$LOG_FILE")
+AUTH_429=$(grep -c "Access token fetch failed: HTTP 429" "$LOG_FILE")
+
+echo "Spotify clients launched: $NUM_CLIENTS"
+if [[ $NUM_CLIENTS -gt 0 ]]; then
+    grep "Spotify client launched for" "$LOG_FILE" | sed 's/.*launched for /  - /g'
+fi
+
+echo ""
+echo "Access token activity:"
+echo "  Token fetch attempts: $TOKEN_FETCHES"
+echo "  Successful fetches: $TOKEN_SUCCESS"
+
+if [[ $TOKEN_FAILURES -gt 0 ]]; then
+    echo -e "  ${RED}✗${NC} Failed fetches: $TOKEN_FAILURES"
+    if [[ $AUTH_429 -gt 0 ]]; then
+        echo -e "    ${YELLOW}⚠${NC} Rate limited on auth endpoint: $AUTH_429"
+    fi
+fi
+
+# Show token expiration times
+TOKEN_EXPIRY=$(grep "expires in.*seconds" "$LOG_FILE" | tail -3)
+if [[ -n "$TOKEN_EXPIRY" ]]; then
+    echo ""
+    echo "Recent token expiration times:"
+    echo "$TOKEN_EXPIRY" | sed 's/.*expires in /  /g'
+fi
+
+# Warn about concurrent clients
+if [[ $NUM_CLIENTS -gt 3 ]]; then
+    echo ""
+    echo -e "${YELLOW}⚠ Warning:${NC} Multiple concurrent clients ($NUM_CLIENTS) from same IP may trigger rate limiting"
+    echo "  Consider staggering startup or reducing number of active clients"
+fi
+echo ""
+
 # Error summary
 echo "=== ERRORS & WARNINGS ==="
 ERROR_COUNT=$(grep -c " E \|ERROR" "$LOG_FILE")

@@ -8,7 +8,7 @@ This directory contains tools for rapid development iteration of the SpotConnect
 
 | Script | Purpose | Usage |
 |--------|---------|-------|
-| `build.sh` | Build and run with change detection | `./build.sh [--platform x86_64] [--clean] [--restart]` |
+| `run.sh` | Build and run with change detection | `./run.sh [--platform x86_64] [--clean] [--restart]` |
 | `logthis.sh` | Log management and analysis | `./logthis.sh [0\|1\|2]` |
 | `analyze-log.sh` | Comprehensive log analysis | `./analyze-log.sh --file <log> --config <xml>` |
 | `analyze-crash.sh` | Decode crash dumps | `./analyze-crash.sh` |
@@ -17,7 +17,7 @@ This directory contains tools for rapid development iteration of the SpotConnect
 
 ```bash
 # Development cycle
-./build.sh                  # Build if changed, start if needed
+./run.sh                  # Build if changed, start if needed
 ./logthis.sh 1              # Snapshot current log to clipboard
 ./logthis.sh 2              # Full analysis with SPIRC debugging
 
@@ -28,9 +28,9 @@ cat ~/.spotconnect/gdb-crash.log  # Full GDB backtrace
 
 ---
 
-## build.sh - Intelligent Build & Run
+## run.sh - Intelligent Build & Run
 
-The `build.sh` script provides an intelligent, automated development workflow that:
+The `run.sh` script provides an intelligent, automated development workflow that:
 - Detects source code and configuration changes
 - Performs incremental or clean builds as needed
 - Manages the application lifecycle (stop/start/restart)
@@ -42,11 +42,11 @@ The `build.sh` script provides an intelligent, automated development workflow th
 ### Basic Usage
 
 ```bash
-./build.sh                        # Default: x86_64 platform
-./build.sh --platform armv7       # Build for specific platform
-./build.sh --clean                # Force clean rebuild
-./build.sh --restart              # Force process restart
-./build.sh --platform x86_64 --clean --restart  # Combine flags
+./run.sh                        # Default: x86_64 platform
+./run.sh --platform armv7       # Build for specific platform
+./run.sh --clean                # Force clean rebuild
+./run.sh --restart              # Force process restart
+./run.sh --platform x86_64 --clean --restart  # Combine flags
 ```
 
 ### Arguments
@@ -111,17 +111,17 @@ The script makes intelligent decisions based on current state:
 The script supports multiple architectures via the `--platform` parameter:
 
 ```bash
-./build.sh --platform x86_64    # Intel/AMD 64-bit (default)
-./build.sh --platform armv7     # ARM v7 (32-bit)
-./build.sh --platform aarch64   # ARM 64-bit
-./build.sh --platform i386      # Intel/AMD 32-bit
+./run.sh --platform x86_64    # Intel/AMD 64-bit (default)
+./run.sh --platform armv7     # ARM v7 (32-bit)
+./run.sh --platform aarch64   # ARM 64-bit
+./run.sh --platform i386      # Intel/AMD 32-bit
 ```
 
 The platform name must match what the main build system expects.
 
 ### Paths and Settings
 
-Core paths are configured at the top of `build.sh`:
+Core paths are configured at the top of `run.sh`:
 
 ```bash
 PLATFORM="x86_64"  # Default, can be overridden with --platform
@@ -145,7 +145,7 @@ On first run, if `config.xml` doesn't exist, the script will:
 
 ## Files in This Directory
 
-- `build.sh` - Main development build and run script (this documentation)
+- `run.sh` - Main development build and run script (this documentation)
 - `config.xml` - Application configuration for development testing
 - `README.md` - This documentation file
 
@@ -204,7 +204,7 @@ ps aux | grep spotupnp
 ### Typical Development Cycle
 
 1. **Make code changes** in `spotupnp/src/`
-2. **Run build script**: `./build.sh`
+2. **Run build script**: `./run.sh`
    - Detects changes automatically
    - Stops running process
    - Rebuilds only if needed
@@ -215,11 +215,11 @@ ps aux | grep spotupnp
 
 ### When to Use Each Mode
 
-- **Normal mode** (`./build.sh`): 99% of the time - let the script decide
-- **Platform switch** (`./build.sh --platform armv7`): Building for different architecture
-- **Clean build** (`./build.sh --clean`): After major changes, CMake issues, or dependency updates
-- **Restart** (`./build.sh --restart`): To restart without rebuilding (e.g., testing same binary)
-- **Combined** (`./build.sh --platform aarch64 --clean`): Platform change with clean build
+- **Normal mode** (`./run.sh`): 99% of the time - let the script decide
+- **Platform switch** (`./run.sh --platform armv7`): Building for different architecture
+- **Clean build** (`./run.sh --clean`): After major changes, CMake issues, or dependency updates
+- **Restart** (`./run.sh --restart`): To restart without rebuilding (e.g., testing same binary)
+- **Combined** (`./run.sh --platform aarch64 --clean`): Platform change with clean build
 
 ## Troubleshooting
 
@@ -244,10 +244,10 @@ cd ~/dev/spotconnect/spotupnp/build/linux-x86_64
 ls -lh ~/dev/spotconnect/spotupnp/build/linux-*/spotupnp-*
 
 # Verify platform matches
-./build.sh --platform x86_64  # Explicitly specify platform
+./run.sh --platform x86_64  # Explicitly specify platform
 
 # Force rebuild
-./build.sh --clean
+./run.sh --clean
 ```
 
 ### Process Won't Stop
@@ -263,14 +263,14 @@ killall -9 spotupnp-linux-x86_64-static
 
 ```bash
 # Try a clean build
-./build.sh --clean
+./run.sh --clean
 
 # Verify platform is supported
-./build.sh --platform x86_64
+./run.sh --platform x86_64
 
 # Check if all dependencies are available
 cd ~/dev/spotconnect/spotupnp
-bash build.sh x86_64 static clean
+bash run.sh x86_64 static clean
 ```
 
 ### "No changes detected but should rebuild"
@@ -434,7 +434,7 @@ The script shows:
 
 ### GDB Integration
 
-The program runs under GDB when started via `build.sh`, which creates:
+The program runs under GDB when started via `run.sh`, which creates:
 - `~/.spotconnect/gdb-crash.log` - Full GDB backtrace with locals, registers, threads
 - `~/.spotconnect/.gdbinit` - GDB configuration for crash capture
 
@@ -469,11 +469,11 @@ gdb path/to/spotupnp-linux-x86_64-static core.*
 
 | File | Purpose | Created By |
 |------|---------|------------|
-| `build.sh` | Build and run script | Manual |
+| `run.sh` | Build and run script | Manual |
 | `logthis.sh` | Log management | Manual |
 | `analyze-log.sh` | Log analysis | Manual |
 | `analyze-crash.sh` | Crash decoder | Manual |
-| `config.xml` | Local device config | `build.sh` (first run) |
+| `config.xml` | Local device config | `run.sh` (first run) |
 | `logthis.log` | Log snapshot | `logthis.sh 1` |
 | `README.md` | This file | Manual |
 
@@ -490,8 +490,8 @@ gdb path/to/spotupnp-linux-x86_64-static core.*
 ## Integration with Main Build System
 
 This script is **separate** from the main project build system:
-- Main build: `spotupnp/build.sh` (production builds)
-- Dev build: `dev-run/build.sh` (rapid iteration)
+- Main build: `spotupnp/run.sh` (production builds)
+- Dev build: `dev-run/run.sh` (rapid iteration)
 
 The dev script calls the main build script internally but adds:
 - Change detection

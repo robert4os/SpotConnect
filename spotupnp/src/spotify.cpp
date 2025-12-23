@@ -107,6 +107,7 @@ private:
     bool flow;
     int cacheMode;
     std::deque<uint32_t> flowMarkers;
+    std::unordered_set<std::string> flowPlayedTracks;
     cspot::TrackInfo flowTrackInfo;
     
     std::unique_ptr<bell::BellHTTPServer> server;
@@ -294,10 +295,19 @@ void CSpotPlayer::trackHandler(std::string_view trackUnique) {
         // be careful that streamer's offset is negative
         metadata_t metadata = { 0 };
         streamer->getMetadata(&metadata);
-        metadata.duration += streamer->offset;
         
-        // in flow mode, metadata are ignored by LOAD
-        if (flow) flowMarkers.push_front(metadata.duration);
+        // in flow mode, use actual duration for flow markers (not adjusted by offset)
+        // offset only affects start position, not track length
+        if (flow) {
+            flowMarkers.push_front(metadata.duration);
+            CSPOT_LOG(info, "[FLOW] Set marker at %u ms (duration=%d, offset=%d) for: <%s>", 
+                 metadata.duration, metadata.duration, streamer->offset, newTrackInfo.name.c_str());
+            CSPOT_LOG(info, "[ANALYSIS:FLOW_ACTIVE] marker=%u, streamers=%zu", metadata.duration, streamers.size());
+        }
+        else {
+            metadata.duration += streamer->offset;  // non-flow mode needs adjusted duration
+            CSPOT_LOG(info, "[ANALYSIS:DISCRETE_MODE] new_streamer");
+        }
        
         // position is optional, shadow player might use it or not
         shadowRequest(shadow, SPOT_LOAD, streamer->getStreamUrl().c_str(), &metadata, (uint32_t)-streamer->offset);
@@ -308,15 +318,42 @@ void CSpotPlayer::trackHandler(std::string_view trackUnique) {
         streamers.push_front(streamer);
         streamer->startTask();
     } else {
-        CSPOT_LOG(info, "flow track of duration %d will start at %u", newTrackInfo.duration, flowMarkers.front());
+        // Flow mode with existing player - subsequent track in flow
+        // Check if we've already played this track (loop detection for repeat+shuffle)
+        if (flowPlayedTracks.count(newTrackInfo.trackId) > 0) {
+            // We've played this track before - playlist has looped
+            CSPOT_LOG(info, "[FLOW] Playlist loop detected - already played: <%s>", 
+                     newTrackInfo.name.c_str());
+            flowMarkers.clear();
+            flowPlayedTracks.clear();
+            flowMarkers.push_front(newTrackInfo.duration);
+        } else {
+            flowMarkers.push_front(flowMarkers.front() + newTrackInfo.duration);
+        }
+        
+        // Track this song as played
+        flowPlayedTracks.insert(newTrackInfo.trackId);
+        
+        CSPOT_LOG(info, "[FLOW] Track <%s> (duration=%d ms) will start at %u ms (markers: %zu, played: %zu)", 
+                 newTrackInfo.name.c_str(), newTrackInfo.duration, flowMarkers.front(), 
+                 flowMarkers.size(), flowPlayedTracks.size());
         player->trackInfo = newTrackInfo;
-        flowMarkers.push_front(flowMarkers.front() + newTrackInfo.duration);
     }
 }
 
  void CSpotPlayer::eventHandler(std::unique_ptr<cspot::SpircHandler::Event> event) {
     switch (event->eventType) {
     case cspot::SpircHandler::EventType::PLAYBACK_START: {
+        // TEST: Deliberate segfault to test GDB crash logging
+        // TODO: REMOVE THIS AFTER TESTING
+        /* // manual counter: 2
+        static int playback_count = 0;
+        if (++playback_count > 2) {  // Crash on 3rd playback start
+            CSPOT_LOG(info, "[TEST] Triggering deliberate segfault for GDB test (playback #%d)", playback_count);
+            int* null_ptr = nullptr;
+            *null_ptr = 42;  // This will crash
+        }
+        */
 #ifdef SMART_FLUSH
         // when flushed in this mode, ignore first PLAYBACK_START
         if (flushed && streamTrackUnique != player->trackUnique) {
@@ -331,16 +368,20 @@ void CSpotPlayer::trackHandler(std::string_view trackUnique) {
 
         shadowRequest(shadow, SPOT_STOP);
 
+        CSPOT_LOG(info, "========== PLAYBACK SESSION START ==========");
+        
         // memorize position for when track's beginning will be detected
         startOffset = std::get<int>(event->data);
         CSPOT_LOG(info, "new track will start at %d", startOffset);
 
-        // clean slate => wipe-out queue and pointers
+        // Always clear state for new playback session
+        // Flow mode is handled at streamer creation time (line 288)
         streamTrackUnique.clear();
         streamers.clear();
-        flowMarkers.clear();
         player.reset();
         playlistEnd = false;
+        flowMarkers.clear();
+        flowPlayedTracks.clear();
 
 #ifndef SMART_FLUSH
         // exit flushed state while transferring that to notify
@@ -427,8 +468,12 @@ void CSpotPlayer::trackHandler(std::string_view trackUnique) {
     }
     case cspot::SpircHandler::EventType::DEPLETED:
         playlistEnd = true;
-        streamers.front()->state = HTTPstreamer::DRAINING;
-        CSPOT_LOG(info, "playlist ended, no track left to play");
+        if (!streamers.empty() && streamers.front()) {
+            streamers.front()->state = HTTPstreamer::DRAINING;
+            CSPOT_LOG(info, "playlist ended, no track left to play");
+        } else {
+            CSPOT_LOG(error, "DEPLETED event but no active streamer (streamers.size=%zu)", streamers.size());
+        }
         break;
     case cspot::SpircHandler::EventType::VOLUME:
         volume = std::get<int>(event->data);
@@ -492,8 +537,11 @@ void notify(CSpotPlayer *self, enum shadowEvent event, va_list args) {
         self->lastTimeStamp = now;
 
         // in flow mode, have we reached a new track marker
-        if (self->flow && self->lastPosition >= self->flowMarkers.back()) {
-            CSPOT_LOG(info, "new flow track at %u", self->flowMarkers.back());
+        // Only trigger if there are more markers left (not on the last track of a repeat cycle)
+        if (self->flow && self->flowMarkers.size() > 1 && self->lastPosition >= self->flowMarkers.back()) {
+            CSPOT_LOG(info, "[FLOW] Track boundary at %u ms (pos=%u, marker=%u, markers=%zu) - current: <%s>", 
+                     self->flowMarkers.back(), self->lastPosition, self->flowMarkers.back(), 
+                     self->flowMarkers.size(), self->player ? self->player->trackInfo.name.c_str() : "none");
             self->flowMarkers.pop_back();
             if (self->notify) self->spirc->notifyAudioReachedPlayback();
             else self->notify = true;
@@ -549,6 +597,7 @@ void notify(CSpotPlayer *self, enum shadowEvent event, va_list args) {
 
 void CSpotPlayer::disconnect(bool abort) {
     // shared playerMutex is already locked
+    CSPOT_LOG(info, "========== PLAYBACK SESSION END ==========");
     CSPOT_LOG(info, "Disconnecting %s", name.c_str());
     state = abort ? ABORT : DISCO;
     shadowRequest(shadow, SPOT_STOP);

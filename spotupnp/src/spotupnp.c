@@ -860,8 +860,16 @@ static void *UpdateThread(void *args) {
 						LOG_DEBUG("[%p] UPnP keep alive: %s", Device, Device->Config.Name);
 
 						// check for name change
-						UpnpDownloadXmlDoc(Update->Data, &DescDoc);
-						if (!friendlyName) friendlyName = XMLGetFirstDocumentItem(DescDoc, "friendlyName", true);
+						int rc = UpnpDownloadXmlDoc(Update->Data, &DescDoc);
+						if (rc == UPNP_E_SUCCESS && DescDoc) {
+							if (!friendlyName) friendlyName = XMLGetFirstDocumentItem(DescDoc, "friendlyName", true);
+							// Free the doc immediately after use to avoid double-free issues
+							ixmlDocument_free(DescDoc);
+							DescDoc = NULL;
+						} else {
+							LOG_DEBUG("[%p]: Failed to download XML for name check (error=%d)", Device, rc);
+							DescDoc = NULL;  // Ensure it's NULL for cleanup
+						}
 
 						if (friendlyName && strcmp(friendlyName, Device->friendlyName)) {
 							char* autoName = NULL;

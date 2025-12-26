@@ -61,6 +61,8 @@ uint16_t			glPortBase, glPortRange;
 char				glInterface[128] = "?";
 char				glCredentialsPath[STR_LEN];
 bool				glCredentials;
+char				glClientId[STR_LEN];
+char				glClientSecret[STR_LEN];
 
 log_level	main_loglevel = lINFO;
 log_level	util_loglevel = lWARN;
@@ -311,7 +313,7 @@ void shadowRequest(struct shadowPlayer *shadow, enum spotEvent event, ...) {
 		// store credentials in dedicated file
 		if (*glCredentialsPath) {
 			char* name;
-			(void) !asprintf(&name, "%s/spotupnp-%08x.json", glCredentialsPath, hash32(Device->UDN));
+			(void) !asprintf(&name, "%s/spotupnp-device-%08x.json", glCredentialsPath, hash32(Device->UDN));
 			FILE* file = fopen(name, "w");
 			free(name);
 			if (file) {
@@ -1065,7 +1067,7 @@ static bool AddMRDevice(struct sMR* Device, char* UDN, IXML_Document* DescDoc, c
 	// or from separated credential file (has precedence)
 	if (*glCredentialsPath) {
 		char* name;
-		(void) !asprintf(&name, "%s/spotupnp-%08x.json", glCredentialsPath, hash32(Device->UDN));
+		(void) !asprintf(&name, "%s/spotupnp-device-%08x.json", glCredentialsPath, hash32(Device->UDN));
 		FILE* file = fopen(name, "r");
 		free(name);
 		if (file) {
@@ -1248,6 +1250,92 @@ static bool Start(bool cold) {
 
 	// start cspot
 	spotOpen(glPortBase, glPortRange, glUserName, glPassword);
+	
+	// Set custom client ID if configured
+	if (*glClientId) {
+		spotSetClientId(glClientId);
+	}
+	
+	// Load client credentials: first from config if glCredentials is enabled, then from file (file has precedence)
+	if (glCredentials) {
+		// Load from config (already loaded during config parsing)
+		LOG_DEBUG("Using client credentials from config");
+	}
+	
+	// Try to load from file if path is set (file has precedence over config)
+	if (*glCredentialsPath) {
+		char* name;
+		(void) !asprintf(&name, "%s/spotupnp-client-credentials.json", glCredentialsPath);
+		FILE* file = fopen(name, "r");
+		if (file) {
+			// Read entire file content
+			fseek(file, 0, SEEK_END);
+			long fsize = ftell(file);
+			fseek(file, 0, SEEK_SET);
+			
+			if (fsize > 0 && fsize < sizeof(glClientSecret)) {
+				(void) !fread(glClientSecret, 1, fsize, file);
+				glClientSecret[fsize] = '\0';
+				LOG_INFO("Loaded client secret from file: %s", name);
+			}
+			fclose(file);
+		}
+		free(name);
+	}
+	
+	if (*glClientSecret) {
+		spotSetClientSecret(glClientSecret);
+	}
+
+	// Validate custom client configuration (OAuth2)
+	if (*glClientId) {
+		// Check if client_secret exists
+		if (!*glClientSecret) {
+			LOG_ERROR("FATAL: Custom client_id configured without client_secret");
+			LOG_ERROR("       Both <client><id> and <client><secret> are required for OAuth2");
+			exit(1);
+		}
+		
+		// Check if credentials_path is configured
+		if (!*glCredentialsPath) {
+			LOG_ERROR("FATAL: Custom client configured but <credentials_path> is not set");
+			LOG_ERROR("       <credentials_path> is required to store OAuth2 token files");
+			exit(1);
+		}
+		
+		// Check if OAuth token file exists
+		char* tokenFile;
+		(void) !asprintf(&tokenFile, "%s/spotupnp-client-%s.json", glCredentialsPath, glClientId);
+		FILE* file = fopen(tokenFile, "r");
+		if (!file) {
+			LOG_ERROR("FATAL: Custom client configured but token file not found: %s", tokenFile);
+			LOG_ERROR("       Please run OAuth2 flow externally (e.g., Spotipy) to obtain tokens first");
+			free(tokenFile);
+			exit(1);
+		}
+		
+		// Load OAuth tokens from file
+		fseek(file, 0, SEEK_END);
+		long fsize = ftell(file);
+		fseek(file, 0, SEEK_SET);
+		
+		if (fsize > 0) {
+			char* tokensJson = malloc(fsize + 1);
+			(void) !fread(tokensJson, 1, fsize, file);
+			tokensJson[fsize] = '\0';
+			spotSetOAuthTokens(tokensJson);
+			LOG_INFO("Custom client validated: id=%s, tokens loaded from %s", glClientId, tokenFile);
+			free(tokensJson);
+		} else {
+			LOG_ERROR("FATAL: Token file is empty: %s", tokenFile);
+			fclose(file);
+			free(tokenFile);
+			exit(1);
+		}
+		
+		fclose(file);
+		free(tokenFile);
+	}
 
 	LOG_INFO("Binding to %s:%hu", inet_ntoa(glHost), glPort);
 

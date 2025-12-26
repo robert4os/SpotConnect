@@ -39,6 +39,11 @@ extern "C" {
 #include "metadata.h"
 #include "codecs.h"
 
+// External global variables from spotupnp.c
+extern "C" {
+    extern char glCredentialsPath[256];  // STR_LEN from spotupnp.h
+}
+
 /****************************************************************************************
  * Encapsulate pthread mutexes into basic_lockable
  */
@@ -123,6 +128,9 @@ private:
     void runTask();
 public:
     inline static std::string username = "", password = "";
+    inline static std::string customClientId = "";  // Custom Spotify client ID
+    inline static std::string customClientSecret = "";  // Custom Spotify client secret
+    inline static std::string oauthTokens = "";  // OAuth2 tokens JSON
 
     CSpotPlayer(char* name, char* id, char *credentials, struct in_addr addr, AudioFormat audio, char* codec, bool flow,
         int64_t contentLength, int cacheMode, struct shadowPlayer* shadow, pthread_mutex_t* mutex);
@@ -344,16 +352,6 @@ void CSpotPlayer::trackHandler(std::string_view trackUnique) {
  void CSpotPlayer::eventHandler(std::unique_ptr<cspot::SpircHandler::Event> event) {
     switch (event->eventType) {
     case cspot::SpircHandler::EventType::PLAYBACK_START: {
-        // TEST: Deliberate segfault to test GDB crash logging
-        // TODO: REMOVE THIS AFTER TESTING
-        /* // manual counter: 3
-        static int playback_count = 0;
-        if (++playback_count > 2) {  // Crash on 3rd playback start
-            CSPOT_LOG(info, "[TEST] Triggering deliberate segfault for GDB test (playback #%d)", playback_count);
-            int* null_ptr = nullptr;
-            *null_ptr = 42;  // This will crash
-        }
-        */
 #ifdef SMART_FLUSH
         // when flushed in this mode, ignore first PLAYBACK_START
         if (flushed && streamTrackUnique != player->trackUnique) {
@@ -666,6 +664,25 @@ void CSpotPlayer::runTask() {
         CSPOT_LOG(info, "Spotify client launched for %s", name.c_str());
 
         auto ctx = cspot::Context::createFromBlob(blob);
+        
+        // Set custom client ID, secret, and OAuth tokens if configured
+        if (!customClientId.empty()) {
+            ctx->config.clientId = customClientId;
+            CSPOT_LOG(info, "Using custom client ID: %s", customClientId.c_str());
+        }
+        if (!customClientSecret.empty()) {
+            ctx->config.clientSecret = customClientSecret;
+        }
+        
+        // Set up OAuth token save callback
+        ctx->config.oauthTokenSaveCallback = [](const std::string& clientId, const std::string& tokensJson) {
+            spotSaveOAuthTokens(clientId.c_str(), tokensJson.c_str());
+        };
+        if (!oauthTokens.empty()) {
+            ctx->config.oauthTokens = oauthTokens;
+            CSPOT_LOG(info, "OAuth2 tokens configured");
+        }
+        
         ctx->config.audioFormat = format;
 
         // seems that mbedtls can catch error that are not fatal, so we should continue
@@ -741,6 +758,60 @@ void spotOpen(uint16_t portBase, uint16_t portRange, char *username, char* passw
     if (portRange) HTTPstreamer::portRange = portRange;
     if (username) CSpotPlayer::username = username;
     if (password) CSpotPlayer::password = password;
+}
+
+void spotSetClientId(const char* clientId) {
+    if (clientId && *clientId) {
+        CSpotPlayer::customClientId = clientId;
+        CSPOT_LOG(info, "Custom Spotify client ID configured: %s", clientId);
+    }
+}
+
+void spotSetClientSecret(const char* clientSecret) {
+    if (clientSecret && *clientSecret) {
+        CSpotPlayer::customClientSecret = clientSecret;
+        CSPOT_LOG(info, "Custom Spotify client secret configured");
+    }
+}
+
+void spotSetOAuthTokens(const char* tokensJson) {
+    if (tokensJson && *tokensJson) {
+        CSpotPlayer::oauthTokens = tokensJson;
+        CSPOT_LOG(info, "OAuth2 tokens loaded");
+    }
+}
+
+void spotSaveOAuthTokens(const char* clientId, const char* tokensJson) {
+    if (!clientId || !*clientId || !tokensJson || !*tokensJson) return;
+    
+    // Check if credentials_path is configured
+    if (!*glCredentialsPath) {
+        CSPOT_LOG(error, "Cannot save OAuth2 tokens: credentials_path is not configured");
+        return;
+    }
+    
+    CSPOT_LOG(info, "Saving OAuth2 tokens for client_id: %s", clientId);
+    
+    // Build file path: <credentials_path>/spotupnp-client-{clientid}.json
+    char* filename;
+    if (asprintf(&filename, "%s/spotupnp-client-%s.json", glCredentialsPath, clientId) == -1) {
+        CSPOT_LOG(error, "Failed to allocate memory for OAuth token file path");
+        return;
+    }
+    
+    // Write tokens to file
+    FILE* file = fopen(filename, "w");
+    if (!file) {
+        CSPOT_LOG(error, "Failed to open OAuth token file for writing: %s", filename);
+        free(filename);
+        return;
+    }
+    
+    fputs(tokensJson, file);
+    fclose(file);
+    
+    CSPOT_LOG(info, "OAuth2 tokens saved to: %s", filename);
+    free(filename);
 }
 
 void spotClose(void) {

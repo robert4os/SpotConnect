@@ -114,13 +114,79 @@ There is also a way for players to store credentials and immediately register to
 
 1- Store credentials in the config file: using the `-j` command line option, SpotConnect reads the .xml config file for `<credentials>` JSON tag and uses it to register. When SpotConnect receives such reusable credentials from Spotify, it will store them into the config file **only if the `-I` option is also set** to authorize its update. Note that the '-j' on command line is equivalent to the **root** tag `<credentials>` of the config file. It's a global enablement parameter and cannot be set per player.
 
-2- Store credentials in separated files: using the `-J <path>` command line option, SpotConnect writes and read such reusable credentials in files named `spotraop-XXXXXXXX.json` (respectively spotupnp...). The root tag `<credentials_path>` in config file is equivalent to the `-J` command line to set base path for these files. This can be a slightly better option to secure such credentials (which again are less sensitive, they won't allow access to your account). **Note: When using `-J`, the `-I` option is NOT required for credentials to be saved to separate files.**
+2- Store credentials in separated files: using the `-J <path>` command line option, SpotConnect writes and read such reusable credentials in files named `spotupnp-device-XXXXXXXX.json` (respectively spotraop-device-...). The root tag `<credentials_path>` in config file is equivalent to the `-J` command line to set base path for these files. This can be a slightly better option to secure such credentials (which again are less sensitive, they won't allow access to your account). **Note: When using `-J`, the `-I` option is NOT required for credentials to be saved to separate files.**
 
 SpotConnect can only write reusable credentials when it obtains it. This can done either by running it **once** with `-U` and `-P` and wait for all UPnP/AirPlay players to be discovered, or by playing something onto each player at least once using (e.g.) Spotify desktop application. When using `-j` to store credentials in the config file, the `-I` option must also be used. When using `-J` to store credentials in separate files, no additional option is needed. 
 
 So for example, if you set `-J`, and a credentials files is found, it will be used to register directly onto servers. If there is no file, this SpotConnect player will remain in ZeroConf mode until it is discovered by Spotify desktop application at which time credentials are received and stored and so next time it will register right away. With `-J`, credentials files are automatically saved when received - no need for `-I`.
 
 I don't know for how long these reusable credentials are valid. In case they become unusable, you can just use -U and -P on command line, it will *force* re-acquisition, or you can delete the credential files and erase the `<credentials>` tags in the config file. Note that if you use `-J` and `-j` at the same time, per-player files and config file will be updated (but `-I` is still required for XML config updates), and the credentials found in dedicated files have precedence.
+
+### Custom Spotify Application (OAuth2)
+
+SpotConnect can optionally use a custom Spotify application instead of the default embedded client. This is useful for advanced users who want to use their own Spotify Developer application credentials. **Note:** Custom applications use OAuth2 authentication which requires manual token acquisition outside of SpotConnect.
+
+**Configuration:**
+
+Add a `<client>` section to your `config.xml`:
+
+```xml
+<client>
+    <id>YOUR_SPOTIFY_CLIENT_ID</id>
+    <secret>YOUR_SPOTIFY_CLIENT_SECRET</secret>
+</client>
+```
+
+**OAuth2 Token File:**
+
+When using a custom client, SpotConnect requires an OAuth2 token file located at:
+- `<credentials_path>/spotupnp-client-{YOUR_CLIENT_ID}.json`
+
+For example: `~/.spotconnect/spotupnp-client-8c37e2714d70455eaf6fc2a82ea3f659.json`
+
+**Token File Format:**
+
+```json
+{
+    "access_token": "BQA...",
+    "refresh_token": "AQA...",
+    "expires_at": 1735200000,
+    "token_type": "Bearer",
+    "scope": "streaming,user-read-playback-state,user-modify-playback-state"
+}
+```
+
+**Obtaining OAuth2 Tokens:**
+
+You must obtain the initial OAuth2 tokens externally using tools like Spotipy or Spotify's Authorization Code Flow:
+
+```python
+import spotipy
+from spotipy.oauth2 import SpotifyOAuth
+
+sp = spotipy.Spotify(auth_manager=SpotifyOAuth(
+    client_id="YOUR_CLIENT_ID",
+    client_secret="YOUR_CLIENT_SECRET",
+    redirect_uri="http://localhost:8888/callback",
+    scope="streaming,user-read-playback-state,user-modify-playback-state",
+    open_browser=True
+))
+
+# Tokens saved to .cache file - copy to SpotConnect token file location
+```
+
+**Behavior:**
+
+- SpotConnect automatically refreshes the `access_token` using the `refresh_token` when it expires (typically every hour)
+- Updated tokens are automatically saved back to the token file
+- **Important:** The OAuth2 account is used only for fetching audio CDN URLs, not for device authentication
+- All devices will use the same custom client for CDN access, regardless of which user controls each device via Spotify Connect
+- The custom client account must have Spotify Premium for audio streaming to work
+
+**File Naming Convention:**
+
+- Device credentials (ZeroConf): `spotupnp-device-{hash}.json` - Per-device reusable credentials
+- OAuth2 tokens (custom client): `spotupnp-client-{clientid}.json` - Shared OAuth2 tokens for CDN access
 
 ## Start automatically in Linux
 

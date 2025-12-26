@@ -178,7 +178,7 @@ echo ""
 # Repeat mode status
 echo "=== REPEAT MODE ==="
 if grep -q "\[REPEAT\] isFinished=false" "$LOG_FILE"; then
-    echo -e "${GREEN}✓${NC} Repeat: ENABLED"
+    echo "Repeat: ENABLED"
     LOOPS=$(grep -c "\[EOF\] Repeat enabled, skipping to next" "$LOG_FILE")
     echo "  Loop iterations: $LOOPS"
     
@@ -189,7 +189,7 @@ if grep -q "\[REPEAT\] isFinished=false" "$LOG_FILE"; then
             sed 's/.*\] /    /g' | nl -w2 -s'. '
     fi
 else
-    echo -e "${RED}✗${NC} Repeat: DISABLED"
+    echo "Repeat: DISABLED"
 fi
 echo ""
 

@@ -474,8 +474,13 @@ if [[ "$SHOULD_REBUILD" == "true" ]]; then
     cd "$BUILD_DIR"
     
     if [[ "$CLEAN_BUILD" == "true" ]]; then
-        echo "    Performing clean build..."
-        if bash build.sh $PLATFORM static clean; then
+        echo "    Performing clean build (removing build directory)..."
+        # Remove entire build directory to force CMake regeneration
+        if [[ -d "$BUILD_DIR/build" ]]; then
+            rm -rf "$BUILD_DIR/build"
+            echo "    Removed: $BUILD_DIR/build"
+        fi
+        if bash build.sh $PLATFORM static; then
             echo "    Clean build successful"
         else
             echo "    Build failed!"

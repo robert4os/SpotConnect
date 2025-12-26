@@ -582,6 +582,7 @@ handle SIGILL stop print nopass
 handle SIGFPE stop print nopass
 handle SIGBUS stop print nopass
 handle SIGPIPE nostop noprint pass
+handle SIGTERM nostop noprint pass
 
 run -z -x $HOME/dev/spotconnect/spotupnp/dev-run/config.xml -f ~/.spotconnect/spotupnp.log
 
@@ -603,8 +604,8 @@ info args
 info locals
 
 echo \n=== MEMORY AT CRASH SITE ===\n
-x/32xb \$rip
-x/8xg \$rsp
+x/32xb $rip
+x/8xg $rsp
 
 echo \n=== HEAP INFO (if available) ===\n
 info proc mappings
@@ -614,8 +615,8 @@ frame 0
 info frame
 info args
 info locals
-x/16xg \$rbp-64
-x/16xg \$rsp
+x/16xg $rbp-64
+x/16xg $rsp
 
 echo \n=== ALL THREADS ===\n
 info threads

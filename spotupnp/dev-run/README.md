@@ -8,7 +8,7 @@ This directory contains tools for rapid development iteration of the SpotConnect
 
 | Script | Purpose | Usage |
 |--------|---------|-------|
-| `run.sh` | Build and run with change detection | `./run.sh [--platform x86_64] [--clean] [--restart] [--kill]` |
+| `run.sh` | Build and run with change detection | `./run.sh [--platform x86_64] [--clean] [--restart] [--kill] [--build-only]` |
 | `logthis.sh` | Log management and analysis | `./logthis.sh [0\|1\|2]` |
 | `analyze-log.sh` | Comprehensive log analysis | `./analyze-log.sh --file <log> --config <xml>` |
 | `analyze-crash.sh` | Decode crash dumps | `./analyze-crash.sh` |
@@ -18,6 +18,7 @@ This directory contains tools for rapid development iteration of the SpotConnect
 ```bash
 # Development cycle
 ./run.sh                  # Build if changed, start if needed
+./run.sh --build-only     # Only compile if changed (no process management)
 ./run.sh --kill             # Kill running process only
 ./logthis.sh 1              # Snapshot current log to clipboard
 ./logthis.sh 2              # Full analysis with SPIRC debugging
@@ -48,6 +49,7 @@ The `run.sh` script provides an intelligent, automated development workflow that
 ./run.sh --clean                # Force clean rebuild
 ./run.sh --restart              # Force process restart
 ./run.sh --kill                 # Kill running process only
+./run.sh --build-only           # Only compile (no process management)
 ./run.sh --platform x86_64 --clean --restart  # Combine flags
 ```
 
@@ -59,6 +61,7 @@ The `run.sh` script provides an intelligent, automated development workflow that
 - `--clean` - Performs a clean build by removing the build directory first
 - `--restart` - Forces a process restart even if no changes are detected
 - `--kill` - Only kills the running process, no build or restart (exits immediately)
+- `--build-only` - Only compiles if code changed, skips all process management (exits after build)
 - Arguments can be combined in any order
 
 ## How It Works
@@ -108,6 +111,8 @@ The script makes intelligent decisions based on current state:
 | `--restart`, process not running | Start (no rebuild unless needed) |
 | `--kill`, process running | Stop → Exit (no rebuild/restart) |
 | `--kill`, process not running | Exit immediately |
+| `--build-only`, changes detected | Rebuild → Exit (no process control) |
+| `--build-only`, no changes | Exit immediately (skip rebuild) |
 
 ## Configuration
 
@@ -225,6 +230,7 @@ ps aux | grep spotupnp
 - **Clean build** (`./run.sh --clean`): After major changes, CMake issues, or dependency updates
 - **Restart** (`./run.sh --restart`): To restart without rebuilding (e.g., testing same binary)
 - **Kill only** (`./run.sh --kill`): Stop the process without rebuilding or restarting
+- **Build only** (`./run.sh --build-only`): Verify code compiles without affecting running process
 - **Combined** (`./run.sh --platform aarch64 --clean`): Platform change with clean build
 
 ## Troubleshooting

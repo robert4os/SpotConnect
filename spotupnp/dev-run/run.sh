@@ -13,6 +13,7 @@ LOGTHIS_FILE="$BUILD_DIR/dev-run/logthis.log"
 CLEAN_BUILD=false
 RESTART=false
 KILL_ONLY=false
+BUILD_ONLY=false
 
 # Enable core dumps for development/debugging
 ulimit -c unlimited
@@ -33,23 +34,29 @@ while [[ $# -gt 0 ]]; do
             KILL_ONLY=true
             shift
             ;;
+        --build-only)
+            BUILD_ONLY=true
+            shift
+            ;;
         --platform)
             PLATFORM="$2"
             shift 2
             ;;
         *)
             echo "ERROR: Unknown argument: $1"
-            echo "Usage: $0 [--platform <arch>] [--clean] [--restart] [--kill]"
+            echo "Usage: $0 [--platform <arch>] [--clean] [--restart] [--kill] [--build-only]"
             echo "  --platform <arch> : Target platform architecture (default: x86_64)"
             echo "  --clean           : Perform clean build (removes build directory)"
             echo "  --restart         : Restart process regardless of changes"
             echo "  --kill            : Only kill the current binary (no build/restart)"
+            echo "  --build-only      : Only compile if code changed (no process management)"
             echo ""
             echo "Examples:"
             echo "  $0                        # Use default platform (x86_64)"
             echo "  $0 --platform armv7       # Build for ARM v7"
             echo "  $0 --clean --restart      # Clean build and restart"
             echo "  $0 --kill                 # Just kill the running process"
+            echo "  $0 --build-only           # Only compile if changed (no run)"
             exit 1
             ;;
     esac
@@ -555,6 +562,19 @@ fi
 # Save binary path for crash analysis tools
 if [[ -n "$BINARY_PATH" && -f "$BINARY_PATH" ]]; then
     echo "$BINARY_PATH" > "$BINARY_PATH_FILE"
+fi
+
+# If --build-only mode, we're done - don't start the process
+if [[ "$BUILD_ONLY" == "true" ]]; then
+    echo ""
+    echo "========================================="
+    echo "Build-only mode: Compilation complete"
+    echo "========================================="
+    echo "  Binary: $BINARY_NAME"
+    echo "  Location: $BUILD_OUTPUT_DIR"
+    echo ""
+    echo "Process NOT started (--build-only mode)"
+    exit 0
 fi
 
 GDB_LOG="$SPOTCONNECT_DIR/gdb-crash.log"

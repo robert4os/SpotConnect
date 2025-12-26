@@ -58,7 +58,9 @@ The `run.sh` script provides an intelligent, automated development workflow that
 - `--platform <arch>` - Target platform architecture (default: x86_64)
   - Examples: x86_64, armv7, aarch64, i386
   - Must match the platform name used by the main build system
-- `--clean` - Performs a clean build by removing the build directory first
+- `--clean` - Performs a clean build by completely removing the build directory
+  - Forces CMake to regenerate all build files from scratch
+  - Eliminates stale configuration and cached build artifacts
 - `--restart` - Forces a process restart even if no changes are detected
 - `--kill` - Only kills the running process, no build or restart (exits immediately)
 - `--build-only` - Only compiles if code changed, skips all process management (exits after build)
@@ -96,6 +98,9 @@ The script avoids unnecessary rebuilds:
 - If no source changes detected and binary exists → skip rebuild
 - If source changed or binary missing → automatic rebuild
 - Use `--clean` to force a complete rebuild from scratch
+  - Removes entire `build/` directory
+  - Forces CMake to regenerate Makefiles and configuration
+  - Ensures no stale build artifacts or cached configuration
 
 ### 5. Smart Behavior
 
@@ -227,7 +232,9 @@ ps aux | grep spotupnp
 
 - **Normal mode** (`./run.sh`): 99% of the time - let the script decide
 - **Platform switch** (`./run.sh --platform armv7`): Building for different architecture
-- **Clean build** (`./run.sh --clean`): After major changes, CMake issues, or dependency updates
+- **Clean build** (`./run.sh --clean`): After major changes, CMake issues, dependency updates, or build problems
+  - Removes entire build directory to force CMake regeneration
+  - Use when encountering strange build errors or configuration issues
 - **Restart** (`./run.sh --restart`): To restart without rebuilding (e.g., testing same binary)
 - **Kill only** (`./run.sh --kill`): Stop the process without rebuilding or restarting
 - **Build only** (`./run.sh --build-only`): Verify code compiles without affecting running process

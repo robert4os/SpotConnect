@@ -611,54 +611,54 @@ handle SIGTERM nostop noprint pass
 
 run -z -x $HOME/dev/spotconnect/spotupnp/dev-run/config.xml -f ~/.spotconnect/spotupnp.log
 
-# If we reach here due to a signal, log it
-set logging enabled on
+# Only log crash info if program stopped due to a signal (not normal exit)
+# Check if we have a valid inferior and it was signaled
+python
+import gdb
+try:
+    inferior = gdb.selected_inferior()
+    threads = inferior.threads()
+    if threads and gdb.selected_thread() and gdb.selected_thread().is_valid():
+        # Program stopped abnormally (signal), proceed with crash logging
+        gdb.execute("set logging enabled on")
+        gdb.execute("echo \\n================================================================================\\n")
+        gdb.execute("echo === CRASH DETECTED (Signal) ===\\n")
+        gdb.execute("echo ================================================================================\\n")
+        gdb.execute("where")
+        gdb.execute("echo \\n=== BACKTRACE WITH LOCALS ===\\n")
+        gdb.execute("backtrace full")
+        gdb.execute("echo \\n=== FRAME INFO ===\\n")
+        gdb.execute("info frame")
+        gdb.execute("info args")
+        gdb.execute("info locals")
+        gdb.execute("echo \\n=== MEMORY AT CRASH SITE ===\\n")
+        gdb.execute("x/32xb $rip")
+        gdb.execute("x/8xg $rsp")
+        gdb.execute("echo \\n=== HEAP INFO (if available) ===\\n")
+        gdb.execute("info proc mappings")
+        gdb.execute("echo \\n=== DETAILED FRAME ANALYSIS ===\\n")
+        gdb.execute("frame 0")
+        gdb.execute("info frame")
+        gdb.execute("info args")
+        gdb.execute("info locals")
+        gdb.execute("x/16xg $rbp-64")
+        gdb.execute("x/16xg $rsp")
+        gdb.execute("echo \\n=== ALL THREADS ===\\n")
+        gdb.execute("info threads")
+        gdb.execute("thread apply all backtrace")
+        gdb.execute("echo \\n=== REGISTERS ===\\n")
+        gdb.execute("info registers")
+        gdb.execute("echo \\n=== SHARED LIBRARIES ===\\n")
+        gdb.execute("info sharedlibrary")
+        gdb.execute("echo \\n=== TRY TO SAVE CORE DUMP ===\\n")
+        gdb.execute("generate-core-file ~/.spotconnect/core-crash")
+        gdb.execute("echo \\n================================================================================\\n")
+        gdb.execute("set logging enabled off")
+except:
+    # No valid inferior or normal exit
+    pass
+end
 
-echo \n================================================================================\n
-echo === CRASH DETECTED ===\n
-echo ================================================================================\n
-
-where
-
-echo \n=== BACKTRACE WITH LOCALS ===\n
-backtrace full
-
-echo \n=== FRAME INFO ===\n
-info frame
-info args
-info locals
-
-echo \n=== MEMORY AT CRASH SITE ===\n
-x/32xb $rip
-x/8xg $rsp
-
-echo \n=== HEAP INFO (if available) ===\n
-info proc mappings
-
-echo \n=== DETAILED FRAME ANALYSIS ===\n
-frame 0
-info frame
-info args
-info locals
-x/16xg $rbp-64
-x/16xg $rsp
-
-echo \n=== ALL THREADS ===\n
-info threads
-thread apply all backtrace
-
-echo \n=== REGISTERS ===\n
-info registers
-
-echo \n=== SHARED LIBRARIES ===\n
-info sharedlibrary
-
-echo \n=== TRY TO SAVE CORE DUMP ===\n
-generate-core-file ~/.spotconnect/core-crash
-
-echo \n================================================================================\n
-
-set logging enabled off
 quit
 GDBCMD
 

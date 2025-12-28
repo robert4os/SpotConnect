@@ -32,6 +32,7 @@
 
 extern "C" {
 #include "cross_util.h"
+#include "cross_log.h"
 }
 
 #include "HTTPstreamer.h"
@@ -42,6 +43,7 @@ extern "C" {
 // External global variables from spotupnp.c
 extern "C" {
     extern char glCredentialsPath[256];  // STR_LEN from spotupnp.h
+    extern log_level main_loglevel;
 }
 
 /****************************************************************************************
@@ -753,6 +755,12 @@ void spotOpen(uint16_t portBase, uint16_t portRange, char *username, char* passw
     if (!bell::bellGlobalLogger) {
         bell::setDefaultLogger();
         bell::enableTimestampLogging(true);
+    }
+    // Enable cspot debug file output when log level is DEBUG or higher
+    if (main_loglevel >= lDEBUG) {
+        setenv("CSPOT_DEBUG_FILES", "1", 1);
+    } else {
+        unsetenv("CSPOT_DEBUG_FILES");
     }
     HTTPstreamer::portBase = portBase;
     if (portRange) HTTPstreamer::portRange = portRange;

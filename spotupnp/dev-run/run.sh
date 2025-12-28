@@ -20,6 +20,7 @@ ulimit -c unlimited
 echo ""  
 echo "==> Dev-Run: Development Build & Run Environment"
 echo "    Core dumps enabled (ulimit -c unlimited)"
+echo ""
 
 # Parse all command line arguments
 while [[ $# -gt 0 ]]; do
@@ -66,11 +67,12 @@ done
 
 # Derive platform-dependent paths
 # Scan for binary in build directories
-echo "==> Detecting binary for platform: $PLATFORM"
+echo "==> Binary Detection"
+echo "    Platform: $PLATFORM"
 FOUND_BINARIES=($(find "$BUILD_DIR/build" -maxdepth 2 -type f -name "spotupnp-*$PLATFORM-static" 2>/dev/null))
 
 if [[ ${#FOUND_BINARIES[@]} -eq 0 ]]; then
-    echo "    No binary found yet (will build)"
+    echo "    Status: Not found (will build)"
     # Try to determine build output directory from existing directories
     BUILD_OUTPUT_DIR=$(find "$BUILD_DIR/build" -maxdepth 1 -type d -name "*$PLATFORM" 2>/dev/null | head -n1)
     if [[ -z "$BUILD_OUTPUT_DIR" ]]; then
@@ -83,8 +85,9 @@ elif [[ ${#FOUND_BINARIES[@]} -eq 1 ]]; then
     BINARY_PATH="${FOUND_BINARIES[0]}"
     BINARY_NAME="$(basename "$BINARY_PATH")"
     BUILD_OUTPUT_DIR="$(dirname "$BINARY_PATH")"
-    echo "    Found: $BINARY_NAME"
-    echo "    Path: $BUILD_OUTPUT_DIR"
+    echo "    Status: Found"
+    echo "    Binary: $BINARY_NAME"
+    echo "    Location: $BUILD_OUTPUT_DIR"
 else
     echo "    ERROR: Multiple binaries found for platform $PLATFORM:"
     for bin in "${FOUND_BINARIES[@]}"; do
@@ -109,7 +112,7 @@ echo ""
 
 # Check if ANY spotupnp binary process is running (platform-agnostic)
 # Check actual executable via /proc filesystem to distinguish from viewers
-echo "==> Checking for any running spotupnp process..."
+echo "==> Process Status"
 PROCESS_RUNNING=false
 RUNNING_BINARY=""
 
@@ -121,7 +124,8 @@ for pid in $(pgrep -f "spotupnp"); do
         # Check if it's actually a spotupnp binary (not tail, grep, etc.)
         if [[ "$exe" =~ spotupnp-.*-static$ ]]; then
             RUNNING_BINARY="$exe"
-            echo "    Found running process: $(basename "$RUNNING_BINARY") (PID: $pid)"
+            echo "    Running: $(basename "$RUNNING_BINARY")"
+            echo "    PID: $pid"
             if [[ -n "$BINARY_NAME" && "$(basename "$RUNNING_BINARY")" != "$BINARY_NAME" ]]; then
                 echo "    WARNING: Different platform binary is running!"
                 echo "             Running: $(basename "$RUNNING_BINARY")"
@@ -134,7 +138,7 @@ for pid in $(pgrep -f "spotupnp"); do
 done
 
 if [[ "$PROCESS_RUNNING" == "false" ]]; then
-    echo "    None found"
+    echo "    Running: No"
 fi
 
 echo ""

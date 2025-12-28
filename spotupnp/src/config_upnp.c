@@ -81,6 +81,7 @@ void SaveConfig(char *name, void *ref, bool full) {
 	XMLUpdateNode(doc, common, false, "use_filecache", "%d", glMRConfig.CacheMode);
 	XMLUpdateNode(doc, common, false, "gapless", "%d", glMRConfig.Gapless);
 	XMLUpdateNode(doc, common, false, "artwork", "%s", glMRConfig.ArtWork);
+	XMLUpdateNode(doc, common, false, "deviceid_prefix", "%s", glDeviceIdPrefix);
 
 	// mutex is locked here so no risk of a player being destroyed in our back
 	for (int i = 0; i < glMaxDevices; i++) {
@@ -147,6 +148,7 @@ static void LoadConfigItem(tMRConfig *Conf, char *name, char *val) {
 	if (!strcmp(name, "gapless")) Conf->Gapless = atoi(val);
 	if (!strcmp(name, "artwork")) strcpy(Conf->ArtWork, val);
 	if (!strcmp(name, "credentials")) strcpy(Conf->Credentials, val);
+	if (!strcmp(name, "deviceid_prefix")) strncpy(glDeviceIdPrefix, val, sizeof(glDeviceIdPrefix) - 1);
 	if (!strcmp(name, "name")) strcpy(Conf->Name, val);
 	if (!strcmp(name, "mac"))  {
 		unsigned mac[6];

@@ -40,10 +40,18 @@ extern "C" {
 #include "metadata.h"
 #include "codecs.h"
 
+// Forward declaration for struct from spotupnp.h
+struct sMRConfig;
+
 // External global variables from spotupnp.c
 extern "C" {
     extern char glCredentialsPath[256];  // STR_LEN from spotupnp.h
+    extern char glDeviceIdPrefix[256];   // STR_LEN from spotupnp.h
+    extern char glConfigName[256];       // STR_LEN from spotupnp.h
+    extern struct sMRConfig glMRConfig;  // Global config structure
     extern log_level main_loglevel;
+    void SaveConfig(char* name, void* ref, bool full);  // from config_upnp.c
+    void* LoadConfig(char* name, struct sMRConfig* Conf);  // from config_upnp.c
 }
 
 /****************************************************************************************
@@ -640,8 +648,30 @@ void CSpotPlayer::runTask() {
     std::scoped_lock lock(this->runningMutex);
     isRunning = true;
     bool zeroConf = false;
-
-    blob = std::make_unique<cspot::LoginBlob>(name);
+    
+    // Get device ID prefix from config, will be generated if empty
+    std::string deviceIdPrefix(glDeviceIdPrefix);
+    bool prefixWasEmpty = deviceIdPrefix.empty();
+    
+    blob = std::make_unique<cspot::LoginBlob>(name, deviceIdPrefix);
+    
+    // If prefix was empty, it was randomly generated - save it back to config
+    if (prefixWasEmpty) {
+        std::string generatedDeviceId = blob->getDeviceId();
+        // Extract the first 24 characters (the prefix part)
+        if (generatedDeviceId.length() >= 24) {
+            strncpy(glDeviceIdPrefix, generatedDeviceId.substr(0, 24).c_str(), 255);
+            glDeviceIdPrefix[255] = '\0';
+            CSPOT_LOG(info, "Generated random device ID prefix: %s", glDeviceIdPrefix);
+            
+            // Save config with the new prefix
+            void* configDoc = LoadConfig(glConfigName, &glMRConfig);
+            if (configDoc) {
+                SaveConfig(glConfigName, configDoc, false);
+                CSPOT_LOG(info, "Saved device ID prefix to config");
+            }
+        }
+    }
 
     if (!username.empty() && !password.empty()) {
         blob->loadUserPass(username, password);

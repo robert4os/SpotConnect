@@ -9,7 +9,9 @@
 
 #include <stdio.h>
 #include <string.h>
+#include <stdlib.h>
 #include <stdarg.h>
+#include <time.h>
 #ifdef _WIN32
 #include <process.h>
 #endif
@@ -17,7 +19,6 @@
 #ifndef _WIN32
 #include <execinfo.h>
 #include <unistd.h>
-#include <time.h>
 #include <fcntl.h>
 #endif
 
@@ -63,6 +64,7 @@ char				glCredentialsPath[STR_LEN];
 bool				glCredentials;
 char				glClientId[STR_LEN];
 char				glClientSecret[STR_LEN];
+char				glDeviceIdPrefix[STR_LEN];
 
 log_level	main_loglevel = lINFO;
 log_level	util_loglevel = lWARN;
@@ -135,7 +137,7 @@ static bool				glInteractive = true;
 static char*			glLogFile;
 static uint16_t			glPort;
 static void*			glConfigID = NULL;
-static char				glConfigName[STR_LEN] = "./config.xml";
+char				glConfigName[STR_LEN] = "./config.xml";
 static bool				glUpdated;
 static char*			glUserName;
 static char*			glPassword;
@@ -1723,6 +1725,16 @@ int main(int argc, char *argv[]) {
 
 	// potentially overwrite with some cmdline parameters
 	if (!ParseArgs(argc, argv)) exit(1);
+	
+	// Generate random device ID prefix if empty (for -i init mode or first run)
+	if (strlen(glDeviceIdPrefix) == 0) {
+		srand((unsigned)time(NULL));
+		for (int i = 0; i < 24; i++) {
+			glDeviceIdPrefix[i] = "0123456789abcdef"[rand() % 16];
+		}
+		glDeviceIdPrefix[24] = '\0';
+		LOG_INFO("Generated random device ID prefix: %s", glDeviceIdPrefix);
+	}
 
 	// make sure port range is correct
 	if (glPortBase && !glPortRange) glPortRange = glMaxDevices*4;

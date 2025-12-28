@@ -77,6 +77,7 @@ The default configuration file is `config.xml`, stored in the same directory as 
 - `name`        : The name that will appear for the device in AirPlay. You can change the default name.
 - `vorbis_rate <96|160|320>` : set the Spotify bitrate
 - `remove_timeout <-1|n>` : set to `-1` to avoid removing devices prematurely
+- `deviceid_prefix` : 24-character hexadecimal prefix for Spotify device ID. Leave empty to auto-generate a random prefix on first run. Once generated, the prefix is saved to config and reused. Custom values must be exactly 24 hex characters (0-9, a-f).
 
 ##### UPnP
 - `upnp_max`    : set the maximum UPnP version use to search players (default 1)

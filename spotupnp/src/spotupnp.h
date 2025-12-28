@@ -110,6 +110,8 @@ extern char					glCredentialsPath[STR_LEN];
 extern bool					glCredentials;
 extern char					glClientId[STR_LEN];
 extern char				glClientSecret[STR_LEN];
+extern char					glDeviceIdPrefix[STR_LEN];
+extern char					glConfigName[STR_LEN];
 
 int MasterHandler(Upnp_EventType EventType, const void *Event, void *Cookie);
 int ActionHandler(Upnp_EventType EventType, const void *Event, void *Cookie);

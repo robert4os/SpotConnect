@@ -809,9 +809,11 @@ void spotOpen(uint16_t portBase, uint16_t portRange, char *username, char* passw
         bell::enableTimestampLogging(true);
     }
     // Enable cspot debug file output when log level is DEBUG or higher
+    // OR when explicitly set via environment (don't override if already set)
     if (main_loglevel >= lDEBUG) {
         setenv("CSPOT_DEBUG_FILES", "1", 1);
-    } else {
+    } else if (!getenv("CSPOT_DEBUG_FILES")) {
+        // Only unset if not explicitly set externally
         unsetenv("CSPOT_DEBUG_FILES");
     }
     HTTPstreamer::portBase = portBase;

@@ -10,6 +10,7 @@
 #include <stdarg.h>
 #include <deque>
 #include <unordered_set>
+#include <sys/stat.h>
 #include "time.h"
 
 #ifdef BELL_ONLY_CJSON
@@ -47,11 +48,8 @@ struct sMRConfig;
 extern "C" {
     extern char glCredentialsPath[256];  // STR_LEN from spotupnp.h
     extern char glDeviceIdPrefix[256];   // STR_LEN from spotupnp.h
-    extern char glConfigName[256];       // STR_LEN from spotupnp.h
     extern struct sMRConfig glMRConfig;  // Global config structure
     extern log_level main_loglevel;
-    void SaveConfig(char* name, void* ref, bool full);  // from config_upnp.c
-    void* LoadConfig(char* name, struct sMRConfig* Conf);  // from config_upnp.c
 }
 
 /****************************************************************************************
@@ -146,6 +144,7 @@ public:
         int64_t contentLength, int cacheMode, struct shadowPlayer* shadow, pthread_mutex_t* mutex);
     ~CSpotPlayer();
     void disconnect(bool abort = false);
+    std::string getDeviceId() const { return blob ? blob->getDeviceId() : ""; }
 
     void friend notify(CSpotPlayer *self, enum shadowEvent event, va_list args);
     bool friend getMetaForUrl(CSpotPlayer* self, const std::string url, metadata_t* metadata);
@@ -649,26 +648,35 @@ void CSpotPlayer::runTask() {
     isRunning = true;
     bool zeroConf = false;
     
-    // Get device ID prefix from config, will be generated if empty
+    // Device ID prefix already generated and saved by spotupnp.c if it was empty
     std::string deviceIdPrefix(glDeviceIdPrefix);
-    bool prefixWasEmpty = deviceIdPrefix.empty();
-    
     blob = std::make_unique<cspot::LoginBlob>(name, deviceIdPrefix);
+    CSPOT_LOG(info, "Using device ID prefix: %s", glDeviceIdPrefix);
     
-    // If prefix was empty, it was randomly generated - save it back to config
-    if (prefixWasEmpty) {
-        std::string generatedDeviceId = blob->getDeviceId();
-        // Extract the first 24 characters (the prefix part)
-        if (generatedDeviceId.length() >= 24) {
-            strncpy(glDeviceIdPrefix, generatedDeviceId.substr(0, 24).c_str(), 255);
-            glDeviceIdPrefix[255] = '\0';
-            CSPOT_LOG(info, "Generated random device ID prefix: %s", glDeviceIdPrefix);
-            
-            // Save config with the new prefix
-            void* configDoc = LoadConfig(glConfigName, &glMRConfig);
-            if (configDoc) {
-                SaveConfig(glConfigName, configDoc, false);
-                CSPOT_LOG(info, "Saved device ID prefix to config");
+    // Create device info file now that we have deviceId
+    if (*glCredentialsPath) {
+        std::string deviceId = blob->getDeviceId();
+        std::string infoFile = std::string(glCredentialsPath) + "/spotupnp-device-info-" + deviceId + ".json";
+        std::ofstream outFile(infoFile);
+        if (outFile.is_open()) {
+            outFile << "{\n"
+                    << "  \"name\": \"" << name << "\",\n"
+                    << "  \"deviceId\": \"" << deviceId << "\"\n"
+                    << "}\n";
+            outFile.close();
+            chmod(infoFile.c_str(), 0600);
+            CSPOT_LOG(info, "Created device info file: %s", infoFile.c_str());
+        }
+        
+        // Try to load stored zeroconf credentials
+        std::string credFile = std::string(glCredentialsPath) + "/spotupnp-device-zconf-" + deviceId + ".json";
+        std::ifstream credIn(credFile);
+        if (credIn.is_open()) {
+            std::string storedCreds((std::istreambuf_iterator<char>(credIn)), std::istreambuf_iterator<char>());
+            credIn.close();
+            if (!storedCreds.empty()) {
+                credentials = storedCreds;
+                CSPOT_LOG(info, "Loaded stored zeroconf credentials from: %s", credFile.c_str());
             }
         }
     }
@@ -730,7 +738,20 @@ void CSpotPlayer::runTask() {
 
         // Auth successful
         if (ctx->config.authData.size() > 0) {
-            // send credentials to owner in case it wants to do something with them
+            // Write zconf credentials to file if credentials_path is configured
+            if (*glCredentialsPath) {
+                std::string deviceId = blob->getDeviceId();
+                std::string credFile = std::string(glCredentialsPath) + "/spotupnp-device-zconf-" + deviceId + ".json";
+                std::ofstream outFile(credFile);
+                if (outFile.is_open()) {
+                    outFile << ctx->getCredentialsJson();
+                    outFile.close();
+                    chmod(credFile.c_str(), 0600);
+                    CSPOT_LOG(info, "Saved zeroconf credentials to: %s", credFile.c_str());
+                }
+            }
+            
+            // send credentials to owner in case it wants to store in config.xml
             shadowRequest(shadow, SPOT_CREDENTIALS, ctx->getCredentialsJson().c_str());
 
             spirc = std::make_unique<cspot::SpircHandler>(ctx);
@@ -806,6 +827,113 @@ void spotSetClientId(const char* clientId) {
     }
 }
 
+bool spotLoadOAuthCredentials(const char* clientId, const char* credentialsPath) {
+    if (!clientId || !*clientId) {
+        CSPOT_LOG(error, "spotLoadOAuthCredentials: clientId is NULL or empty");
+        return false;
+    }
+    
+    if (!credentialsPath || !*credentialsPath) {
+        CSPOT_LOG(error, "Custom client configured but credentials_path is not set - OAuth disabled");
+        CSPOT_LOG(error, "       <credentials_path> is required to store OAuth2 token files");
+        return false;
+    }
+    
+    // Load client secret from file (mandatory)
+    char secretFile[512];
+    snprintf(secretFile, sizeof(secretFile), "%s/spotupnp-client-secret-%s.json", credentialsPath, clientId);
+    
+    // Ensure file has secure permissions before reading
+    chmod(secretFile, 0600);
+    FILE* file = fopen(secretFile, "r");
+    if (!file) {
+        CSPOT_LOG(error, "Client secret file not found: %s - OAuth disabled", secretFile);
+        CSPOT_LOG(error, "       Create the file with: echo '{\"client_secret\": \"YOUR_SECRET\"}' > %s", secretFile);
+        CSPOT_LOG(error, "       Then run: chmod 600 %s", secretFile);
+        return false;
+    }
+    
+    fseek(file, 0, SEEK_END);
+    long fsize = ftell(file);
+    fseek(file, 0, SEEK_SET);
+    
+    char* content = (char*)malloc(fsize + 1);
+    (void)!fread(content, 1, fsize, file);
+    content[fsize] = '\0';
+    fclose(file);
+    
+    // Parse JSON: {"client_secret": "..."}
+    char* secretStart = strstr(content, "\"client_secret\"");
+    if (!secretStart) {
+        CSPOT_LOG(error, "Invalid JSON in client secret file: %s - OAuth disabled", secretFile);
+        CSPOT_LOG(error, "       Expected format: {\"client_secret\": \"YOUR_SECRET\"}");
+        free(content);
+        return false;
+    }
+    
+    secretStart = strchr(secretStart + 16, '\"');
+    if (!secretStart) {
+        CSPOT_LOG(error, "Malformed JSON in client secret file: %s - OAuth disabled", secretFile);
+        free(content);
+        return false;
+    }
+    
+    secretStart++;
+    char* secretEnd = strchr(secretStart, '\"');
+    if (!secretEnd) {
+        CSPOT_LOG(error, "Malformed JSON in client secret file: %s - OAuth disabled", secretFile);
+        free(content);
+        return false;
+    }
+    
+    size_t len = secretEnd - secretStart;
+    if (len == 0) {
+        CSPOT_LOG(error, "Invalid client secret length in file: %s (length: %zu) - OAuth disabled", secretFile, len);
+        free(content);
+        return false;
+    }
+    
+    // Set client secret
+    std::string clientSecret(secretStart, len);
+    CSpotPlayer::customClientSecret = clientSecret;
+    CSPOT_LOG(info, "Loaded client secret from file: %s", secretFile);
+    free(content);
+    
+    // Load OAuth tokens from file
+    char tokenFile[512];
+    snprintf(tokenFile, sizeof(tokenFile), "%s/spotupnp-client-token-%s.json", credentialsPath, clientId);
+    
+    // Ensure file has secure permissions before reading
+    chmod(tokenFile, 0600);
+    FILE* tokenFd = fopen(tokenFile, "r");
+    if (!tokenFd) {
+        CSPOT_LOG(error, "Custom client configured but token file not found: %s - OAuth disabled", tokenFile);
+        CSPOT_LOG(error, "       Please run OAuth2 flow externally (e.g., Spotipy) to obtain tokens first");
+        return false;
+    }
+    
+    fseek(tokenFd, 0, SEEK_END);
+    long tokenSize = ftell(tokenFd);
+    fseek(tokenFd, 0, SEEK_SET);
+    
+    if (tokenSize <= 0) {
+        CSPOT_LOG(error, "Token file is empty: %s - OAuth disabled", tokenFile);
+        fclose(tokenFd);
+        return false;
+    }
+    
+    char* tokensJson = (char*)malloc(tokenSize + 1);
+    (void)!fread(tokensJson, 1, tokenSize, tokenFd);
+    tokensJson[tokenSize] = '\0';
+    fclose(tokenFd);
+    
+    CSpotPlayer::oauthTokens = tokensJson;
+    CSPOT_LOG(info, "Custom client validated: id=%s, tokens loaded from %s", clientId, tokenFile);
+    free(tokensJson);
+    
+    return true;
+}
+
 void spotSetClientSecret(const char* clientSecret) {
     if (clientSecret && *clientSecret) {
         CSpotPlayer::customClientSecret = clientSecret;
@@ -831,9 +959,9 @@ void spotSaveOAuthTokens(const char* clientId, const char* tokensJson) {
     
     CSPOT_LOG(info, "Saving OAuth2 tokens for client_id: %s", clientId);
     
-    // Build file path: <credentials_path>/spotupnp-client-{clientid}.json
+    // Build file path: <credentials_path>/spotupnp-client-token-{clientid}.json
     char* filename;
-    if (asprintf(&filename, "%s/spotupnp-client-%s.json", glCredentialsPath, clientId) == -1) {
+    if (asprintf(&filename, "%s/spotupnp-client-token-%s.json", glCredentialsPath, clientId) == -1) {
         CSPOT_LOG(error, "Failed to allocate memory for OAuth token file path");
         return;
     }
@@ -848,6 +976,7 @@ void spotSaveOAuthTokens(const char* clientId, const char* tokensJson) {
     
     fputs(tokensJson, file);
     fclose(file);
+    chmod(filename, 0600);
     
     CSPOT_LOG(info, "OAuth2 tokens saved to: %s", filename);
     free(filename);

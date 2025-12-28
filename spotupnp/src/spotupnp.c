@@ -20,6 +20,7 @@
 #include <execinfo.h>
 #include <unistd.h>
 #include <fcntl.h>
+#include <sys/stat.h>
 #endif
 
 #include "platform.h"
@@ -312,19 +313,8 @@ void shadowRequest(struct shadowPlayer *shadow, enum spotEvent event, ...) {
 	case SPOT_CREDENTIALS: {
 		char* Credentials = va_arg(args, char*);
 
-		// store credentials in dedicated file
-		if (*glCredentialsPath) {
-			char* name;
-			(void) !asprintf(&name, "%s/spotupnp-device-%08x.json", glCredentialsPath, hash32(Device->UDN));
-			FILE* file = fopen(name, "w");
-			free(name);
-			if (file) {
-				fputs(Credentials, file);
-				fclose(file);
-			}
-		}
-
-		// store credentials in XML config file (small chance of race condition)
+		// Store credentials in XML config file if enabled
+		// (zconf file already written by spotify.cpp)
 		if (glCredentials && glAutoSaveConfigFile) {
 			glUpdated = true;
 			strncpy(Device->Config.Credentials, Credentials, sizeof(Device->Config.Credentials) - 1);
@@ -911,17 +901,17 @@ static void *UpdateThread(void *args) {
 						NFREE(friendlyName);
 						goto cleanup;
 					}
-				}
+			}
 
-				// this can take a very long time, too bad for the queue...
-				int rc;
-				if ((rc = UpnpDownloadXmlDoc(Update->Data, &DescDoc)) != UPNP_E_SUCCESS) {
-					LOG_DEBUG("Error obtaining description %s -- error = %d\n", Update->Data, rc);
-					goto cleanup;
-				}
+			// this can take a very long time, too bad for the queue...
+			int rc;
+			if ((rc = UpnpDownloadXmlDoc(Update->Data, &DescDoc)) != UPNP_E_SUCCESS) {
+				LOG_DEBUG("Error obtaining description %s -- error = %d\n", Update->Data, rc);
+				goto cleanup;
+			}
 
-				// not a media renderer but maybe a Sonos group update
-				if (!XMLMatchDocumentItem(DescDoc, "deviceType", MEDIA_RENDERER, false)) {
+			// not a media renderer but maybe a Sonos group update
+			if (!XMLMatchDocumentItem(DescDoc, "deviceType", MEDIA_RENDERER, false)) {
 					goto cleanup;
 				}
 
@@ -960,19 +950,19 @@ static void *UpdateThread(void *args) {
 					}
 				}
 
-cleanup:
-				if (glUpdated && (glAutoSaveConfigFile || glDiscovery)) {
-					glUpdated = false;
-					LOG_DEBUG("Updating configuration %s", glConfigName);
-					SaveConfig(glConfigName, glConfigID, false);
-				}
-
-				NFREE(UDN);
-				NFREE(ModelName);
-				NFREE(ModelNumber);
-				if (DescDoc) ixmlDocument_free(DescDoc);
-			}
+	cleanup:
+		if (glUpdated && (glAutoSaveConfigFile || glDiscovery)) {
+			glUpdated = false;
+			LOG_DEBUG("Updating configuration %s", glConfigName);
+			SaveConfig(glConfigName, glConfigID, false);
 		}
+
+		NFREE(UDN);
+		NFREE(ModelName);
+		NFREE(ModelNumber);
+		if (DescDoc) ixmlDocument_free(DescDoc);
+	}
+	}
 	}
 
 	return NULL;
@@ -990,21 +980,22 @@ static void *MainThread(void *args) {
 
 			if (size > glLogLimit*1024*1024) {
 				uint32_t Sum, BufSize = 16384;
-				uint8_t *buf = malloc(BufSize);
+				char *buf;
+				FILE *rlog, *wlog;
 
-				FILE *rlog = fopen(glLogFile, "rb");
-				FILE *wlog = fopen(glLogFile, "r+b");
 				LOG_DEBUG("Resizing log", NULL);
-				for (Sum = 0, fseek(rlog, size - (glLogLimit*1024*1024) / 2, SEEK_SET);
+				if ((wlog = fopen(glLogFile, "rb")) && (rlog = fopen(glLogFile, "r+b")) && (buf = malloc(BufSize))) {
+					for (Sum = 0, fseek(rlog, size - glLogLimit*1024*1024, SEEK_SET);
 					 (BufSize = fread(buf, 1, BufSize, rlog)) != 0;
 					 Sum += BufSize, fwrite(buf, 1, BufSize, wlog)) {}
 
-				Sum = fresize(wlog, Sum);
-				fclose(wlog);
-				fclose(rlog);
-				NFREE(buf);
-				if (!freopen(glLogFile, "a", stderr)) {
-					LOG_ERROR("re-open error while truncating log", NULL);
+					Sum = fresize(wlog, Sum);
+					fclose(wlog);
+					fclose(rlog);
+					NFREE(buf);
+					if (!freopen(glLogFile, "a", stderr)) {
+						LOG_ERROR("re-open error while truncating log", NULL);
+					}
 				}
 			}
 		}
@@ -1063,20 +1054,7 @@ static bool AddMRDevice(struct sMR* Device, char* UDN, IXML_Document* DescDoc, c
 	strcpy(Device->UDN, UDN);
 	strcpy(Device->DescDocURL, location);
 
-	// get credentials from config file if allowed
-	if (glCredentials) strcpy(Device->Credentials, Device->Config.Credentials);
-
-	// or from separated credential file (has precedence)
-	if (*glCredentialsPath) {
-		char* name;
-		(void) !asprintf(&name, "%s/spotupnp-device-%08x.json", glCredentialsPath, hash32(Device->UDN));
-		FILE* file = fopen(name, "r");
-		free(name);
-		if (file) {
-			(void) !fgets(Device->Credentials, sizeof(Device->Credentials), file);
-			fclose(file);
-		}
-	}
+	// Credentials loaded in spotify.cpp after deviceId available from blob
 
 	memset(&Device->MetaData, 0, sizeof(Device->MetaData));
 	memset(&Device->Service, 0, sizeof(struct sService) * NB_SRV);
@@ -1126,6 +1104,8 @@ static bool AddMRDevice(struct sMR* Device, char* UDN, IXML_Document* DescDoc, c
 	if (friendlyName) strcpy(Device->friendlyName, friendlyName);
 	if (!*Device->Config.Name) sprintf(Device->Config.Name, glNameFormat, friendlyName);
 	queue_init(&Device->ActionQueue, false, NULL);
+
+	// Device info file will be created after spotCreatePlayer when deviceId is available
 
 	char* MimeType;
 	if (!strcasecmp(Device->Config.Codec, "pcm")) MimeType = "audio/L16;rate=44100;channels=2";
@@ -1253,90 +1233,13 @@ static bool Start(bool cold) {
 	// start cspot
 	spotOpen(glPortBase, glPortRange, glUserName, glPassword);
 	
-	// Set custom client ID if configured
+	// Set custom client ID and load OAuth credentials if configured
 	if (*glClientId) {
 		spotSetClientId(glClientId);
-	}
-	
-	// Load client credentials: first from config if glCredentials is enabled, then from file (file has precedence)
-	if (glCredentials) {
-		// Load from config (already loaded during config parsing)
-		LOG_DEBUG("Using client credentials from config");
-	}
-	
-	// Try to load from file if path is set (file has precedence over config)
-	if (*glCredentialsPath) {
-		char* name;
-		(void) !asprintf(&name, "%s/spotupnp-client-credentials.json", glCredentialsPath);
-		FILE* file = fopen(name, "r");
-		if (file) {
-			// Read entire file content
-			fseek(file, 0, SEEK_END);
-			long fsize = ftell(file);
-			fseek(file, 0, SEEK_SET);
-			
-			if (fsize > 0 && fsize < sizeof(glClientSecret)) {
-				(void) !fread(glClientSecret, 1, fsize, file);
-				glClientSecret[fsize] = '\0';
-				LOG_INFO("Loaded client secret from file: %s", name);
-			}
-			fclose(file);
+		// Load OAuth credentials (client secret + tokens) from files
+		if (!spotLoadOAuthCredentials(glClientId, glCredentialsPath)) {
+			LOG_WARN("OAuth credentials not loaded - continuing without custom client");
 		}
-		free(name);
-	}
-	
-	if (*glClientSecret) {
-		spotSetClientSecret(glClientSecret);
-	}
-
-	// Validate custom client configuration (OAuth2)
-	if (*glClientId) {
-		// Check if client_secret exists
-		if (!*glClientSecret) {
-			LOG_ERROR("FATAL: Custom client_id configured without client_secret");
-			LOG_ERROR("       Both <client><id> and <client><secret> are required for OAuth2");
-			exit(1);
-		}
-		
-		// Check if credentials_path is configured
-		if (!*glCredentialsPath) {
-			LOG_ERROR("FATAL: Custom client configured but <credentials_path> is not set");
-			LOG_ERROR("       <credentials_path> is required to store OAuth2 token files");
-			exit(1);
-		}
-		
-		// Check if OAuth token file exists
-		char* tokenFile;
-		(void) !asprintf(&tokenFile, "%s/spotupnp-client-%s.json", glCredentialsPath, glClientId);
-		FILE* file = fopen(tokenFile, "r");
-		if (!file) {
-			LOG_ERROR("FATAL: Custom client configured but token file not found: %s", tokenFile);
-			LOG_ERROR("       Please run OAuth2 flow externally (e.g., Spotipy) to obtain tokens first");
-			free(tokenFile);
-			exit(1);
-		}
-		
-		// Load OAuth tokens from file
-		fseek(file, 0, SEEK_END);
-		long fsize = ftell(file);
-		fseek(file, 0, SEEK_SET);
-		
-		if (fsize > 0) {
-			char* tokensJson = malloc(fsize + 1);
-			(void) !fread(tokensJson, 1, fsize, file);
-			tokensJson[fsize] = '\0';
-			spotSetOAuthTokens(tokensJson);
-			LOG_INFO("Custom client validated: id=%s, tokens loaded from %s", glClientId, tokenFile);
-			free(tokensJson);
-		} else {
-			LOG_ERROR("FATAL: Token file is empty: %s", tokenFile);
-			fclose(file);
-			free(tokenFile);
-			exit(1);
-		}
-		
-		fclose(file);
-		free(tokenFile);
 	}
 
 	LOG_INFO("Binding to %s:%hu", inet_ntoa(glHost), glPort);
@@ -1734,6 +1637,7 @@ int main(int argc, char *argv[]) {
 		}
 		glDeviceIdPrefix[24] = '\0';
 		LOG_INFO("Generated random device ID prefix: %s", glDeviceIdPrefix);
+		glUpdated = true;  // Trigger config save
 	}
 
 	// make sure port range is correct
@@ -1753,6 +1657,13 @@ int main(int argc, char *argv[]) {
 
 	if (!glConfigID) {
 		LOG_WARN("no config file, using defaults", NULL);
+	}
+
+	// Save config if deviceid_prefix was auto-generated
+	if (glUpdated && glConfigID) {
+		LOG_INFO("Saving auto-generated device ID prefix to config");
+		SaveConfig(glConfigName, glConfigID, false);
+		glUpdated = false;
 	}
 
 	// just do discovery and exit

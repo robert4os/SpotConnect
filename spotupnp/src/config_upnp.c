@@ -61,14 +61,10 @@ void SaveConfig(char *name, void *ref, bool full) {
 	XMLUpdateNode(doc, root, false, "credentials", "%d", glCredentials);
 	XMLUpdateNode(doc, root, false, "ports", "%hu:%hu", glPortBase, glPortRange);
 	
-	// Always save client section when creating new config (full mode or no old_doc)
-	// or when values are actually configured
-	if (full || !old_doc || *glClientId || *glClientSecret) {
-		IXML_Node* client_node = XMLUpdateNode(doc, root, false, "client", NULL);
-		if (client_node) {
-			XMLUpdateNode(doc, client_node, false, "id", glClientId);
-			XMLUpdateNode(doc, client_node, false, "secret", glClientSecret);
-		}
+	// Save client_id directly at root level (not nested)
+	if (full || !old_doc || *glClientId) {
+		XMLUpdateNode(doc, root, false, "client_id", glClientId);
+		// Note: client_secret should be stored in spotupnp-client-secret-<id>.json, not in config
 	}
 
 	XMLUpdateNode(doc, common, false, "enabled", "%d", (int) glMRConfig.Enabled);
@@ -81,10 +77,11 @@ void SaveConfig(char *name, void *ref, bool full) {
 	XMLUpdateNode(doc, common, false, "use_filecache", "%d", glMRConfig.CacheMode);
 	XMLUpdateNode(doc, common, false, "gapless", "%d", glMRConfig.Gapless);
 	XMLUpdateNode(doc, common, false, "artwork", "%s", glMRConfig.ArtWork);
-	XMLUpdateNode(doc, common, false, "deviceid_prefix", "%s", glDeviceIdPrefix);
+	XMLUpdateNode(doc, common, true, "deviceid_prefix", "%s", glDeviceIdPrefix);
 
 	// mutex is locked here so no risk of a player being destroyed in our back
-	for (int i = 0; i < glMaxDevices; i++) {
+	// (glMRDevices may be NULL if called before Start() allocates the array)
+	for (int i = 0; glMRDevices && i < glMaxDevices; i++) {
 		IXML_Node *dev_node;
 
 		if (!glMRDevices[i].Running) continue;
@@ -259,24 +256,8 @@ void *LoadConfig(char *name, tMRConfig *Conf) {
 		if (l1_node_list) ixmlNodeList_free(l1_node_list);
 	}
 
-	// Load client configuration for custom client ID and credentials
-	elm = ixmlDocument_getElementById(doc, "client");
-	if (elm) {
-		IXML_NodeList* l1_node_list = ixmlNode_getChildNodes((IXML_Node*) elm);
-		for (unsigned i = 0; i < ixmlNodeList_length(l1_node_list); i++) {
-			IXML_Node* l1_node = ixmlNodeList_item(l1_node_list, i);
-			char* n = (char*) ixmlNode_getNodeName(l1_node);
-			IXML_Node* l1_1_node = ixmlNode_getFirstChild(l1_node);
-			char* v = (char*) ixmlNode_getNodeValue(l1_1_node);
-			
-			if (!strcmp(n, "id")) {
-				if (v) strncpy(glClientId, v, sizeof(glClientId) - 1);
-			} else if (!strcmp(n, "secret")) {
-				if (v) strncpy(glClientSecret, v, sizeof(glClientSecret) - 1);
-			}
-		}
-		if (l1_node_list) ixmlNodeList_free(l1_node_list);
-	}
+	// Load client_id configuration
+	// Note: client_secret is never stored in config.xml, only in spotupnp-client-secret-<id>.json
 
 	return doc;
 }

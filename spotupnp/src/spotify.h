@@ -38,9 +38,11 @@ void				   shadowRequest(struct shadowPlayer* shadow, enum spotEvent event, ...)
 struct spotPlayer* spotCreatePlayer(char* name, char* id, char *credentials, struct in_addr addr, int audio, char *codec, bool flow, 
 								    int64_t contentLength, int cacheMode, struct shadowPlayer* shadow, pthread_mutex_t *mutex);
 void spotDeletePlayer(struct spotPlayer *spotPlayer);
+
 bool spotGetMetaForUrl(struct spotPlayer* spotPlayer, const char* url, metadata_t* metadata);
 void spotOpen(uint16_t portBase, uint16_t portRange, char* username, char *password);
 void spotSetClientId(const char* clientId);
+bool spotLoadOAuthCredentials(const char* clientId, const char* credentialsPath);
 void spotSetClientSecret(const char* clientSecret);
 void spotSetOAuthTokens(const char* tokensJson);
 void spotSaveOAuthTokens(const char* clientId, const char* tokensJson);

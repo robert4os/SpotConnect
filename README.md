@@ -105,6 +105,25 @@ These are set in the main `<spotraop>` section:
 
 There are many other parameters, to list all of them, use `-i <config>` to create a default config file.
 
+### Log Levels and Debug Files
+
+SpotConnect supports several log levels that can be configured in `config.xml`:
+- `main_log` - Controls logging for the main application and Spotify integration
+- `upnp_log` - Controls logging for UPnP protocol operations
+- `util_log` - Controls logging for utility functions
+
+Valid log levels (from least to most verbose): `silence`, `error`, `warn`, `info`, `debug`, `sdebug`
+
+**Debug File Output**: When `main_log` is set to `debug` or `sdebug`, SpotConnect automatically generates detailed debug files in `/tmp/`:
+- `spotupnp-device-zeroconf-{deviceId}.json` - ZeroConf discovery information including device capabilities
+- `spotupnp-device-spirc-{deviceId}.txt` - Human-readable SPIRC protocol frame dumps showing all messages sent to Spotify servers
+
+These files are invaluable for troubleshooting device capability issues, podcast support problems, or any protocol-level debugging.
+
+**Environment Variables**:
+- `CSPOT_DEBUG_FILES` - When set to `1`, enables debug file output (automatically set by `main_log` level)
+- `CSPOT_UNBUFFERED` - When set, forces immediate flushing of log output (useful for debugging crashes)
+
 ### Credentials
 A player can be discovered using the *ZeroConf* protocol or can spontaneuously register to Spotify servers. When using ZeroConf, the player is by default not registered to Spotify servers and if you use a WebAPI application (e.g. an HomeAutomation service), it will not list it. Here is the reason why:
 

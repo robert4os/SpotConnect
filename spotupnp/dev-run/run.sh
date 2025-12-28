@@ -17,7 +17,9 @@ BUILD_ONLY=false
 
 # Enable core dumps for development/debugging
 ulimit -c unlimited
-echo "Dev-run: Core dumps enabled (ulimit -c unlimited)"
+echo ""  
+echo "==> Dev-Run: Development Build & Run Environment"
+echo "    Core dumps enabled (ulimit -c unlimited)"
 
 # Parse all command line arguments
 while [[ $# -gt 0 ]]; do
@@ -93,15 +95,15 @@ fi
 echo ""
 
 # Display script mode
-echo "==> Quick Development Build and Run Script"
+echo "==> Execution Mode"
 if [[ "$CLEAN_BUILD" == "true" && "$RESTART" == "true" ]]; then
-    echo "    Mode: CLEAN BUILD + RESTART"
+    echo "    CLEAN BUILD + RESTART"
 elif [[ "$CLEAN_BUILD" == "true" ]]; then
-    echo "    Mode: CLEAN BUILD"
+    echo "    CLEAN BUILD"
 elif [[ "$RESTART" == "true" ]]; then
-    echo "    Mode: RESTART"
+    echo "    RESTART"
 else
-    echo "    Mode: NORMAL (use --clean or --restart for special modes)"
+    echo "    NORMAL (use --clean or --restart for special modes)"
 fi
 echo ""
 
@@ -132,7 +134,7 @@ for pid in $(pgrep -f "spotupnp"); do
 done
 
 if [[ "$PROCESS_RUNNING" == "false" ]]; then
-    echo "    No running process found"
+    echo "    None found"
 fi
 
 echo ""
@@ -140,11 +142,11 @@ echo ""
 # Handle --kill argument
 if [[ "$KILL_ONLY" == "true" ]]; then
     if [[ "$PROCESS_RUNNING" == "false" ]]; then
-        echo "==> No process to kill"
+        echo "==> Kill Mode: No process to kill"
         exit 0
     fi
     
-    echo "==> Killing spotupnp process..."
+    echo "==> Kill Mode: Stopping process..."
     
     # Get initial log size/position
     if [[ -f "$LOG_FILE" ]]; then
@@ -200,6 +202,7 @@ if [[ "$KILL_ONLY" == "true" ]]; then
         echo "    Process forcefully terminated"
     fi
     
+    echo ""  
     echo "==> Done"
     exit 0
 fi
@@ -210,7 +213,8 @@ mkdir -p "$SPOTCONNECT_DIR"
 
 # Check if config file exists, if not create it
 if [[ ! -f "$CONFIG_FILE" ]]; then
-    echo "==> Config file not found: $CONFIG_FILE"
+    echo "==> Configuration Setup"
+    echo "    Config file not found: $CONFIG_FILE"
     
     # We need a binary to generate config - ensure we have one
     if [[ -z "$BINARY_PATH" || ! -f "$BINARY_PATH" ]]; then
@@ -242,7 +246,7 @@ if [[ ! -f "$CONFIG_FILE" ]]; then
 fi
 
 # Check if config file has changed
-echo "==> Checking for config file changes..."
+echo "==> Configuration Change Detection"
 CONFIG_CHANGED=${CONFIG_CHANGED:-false}
 CURRENT_CONFIG_HASH=""
 PREVIOUS_CONFIG_HASH=""
@@ -257,20 +261,20 @@ if [[ -f "$CONFIG_FILE" ]]; then
             echo "    Config file has changed"
             CONFIG_CHANGED=true
         else
-            echo "    No config changes detected"
+            echo "    Config unchanged"
         fi
     else
-        echo "    First run - no previous config hash found"
+        echo "    First run - no previous config hash"
         CONFIG_CHANGED=true
     fi
 else
-    echo "    WARNING: Config file still not found: $CONFIG_FILE"
+    echo "    WARNING: Config file not found: $CONFIG_FILE"
 fi
 
 echo ""
 
 # Check if the source code has been changed using git
-echo "==> Checking for source code changes via git..."
+echo "==> Source Code Change Detection (git)"
 cd "$BUILD_DIR"
 SOURCE_CHANGED=false
 
@@ -367,18 +371,20 @@ if [[ "$RESTART" == "true" ]]; then
 elif [[ "$SOMETHING_CHANGED" == "false" && "$PROCESS_RUNNING" == "true" ]]; then
     # If nothing changed and process is running (and not restart), abort
     # Clear log file before exiting (process keeps running)
-    echo "==> Clearing log file: $LOG_FILE"
+    echo "==> Clearing Logs"
+    echo "    Log file: $LOG_FILE"
     > "$LOG_FILE"
     [[ -f "$LOGTHIS_FILE" ]] && rm "$LOGTHIS_FILE"
     echo ""
     
     echo "========================================="
-    echo "No action needed:"
-    echo "  - Source code: unchanged"
-    echo "  - Config file: unchanged"
-    echo "  - Process: already running"
+    echo "  No Action Needed"  
+    echo "========================================="
+    echo "  Source code : unchanged"
+    echo "  Config file : unchanged"
+    echo "  Process     : running"
     echo ""
-    echo "Everything is up to date and running."
+    echo "Everything is up to date."
     echo "========================================="
     return 0 2>/dev/null || exit 0
 fi
@@ -393,9 +399,9 @@ fi
 # If something changed and process is running, OR restart requested and process running, kill it
 if [[ "$PROCESS_RUNNING" == "true" && ("$SOMETHING_CHANGED" == "true" || "$RESTART" == "true") ]]; then
     if [[ "$RESTART" == "true" ]]; then
-        echo "==> Restarting process..."
+        echo "==> Stopping Process (restart requested)"
     else
-        echo "==> Stopping running process due to changes..."
+        echo "==> Stopping Process (changes detected)"
     fi
     
     # Get initial log size/position
@@ -457,40 +463,43 @@ fi
 # Decide whether to rebuild
 SHOULD_REBUILD=false
 if [[ "$SOURCE_CHANGED" == "true" ]]; then
-    echo "==> Rebuild required due to source changes"
+    echo "==> Build Decision: Rebuild Required"
+    echo "    Reason: Source code changed"
     SHOULD_REBUILD=true
 elif [[ "$BINARY_EXISTS" == "false" ]]; then
-    echo "==> Rebuild required - binary does not exist"
+    echo "==> Build Decision: Rebuild Required"
+    echo "    Reason: Binary does not exist"
     SHOULD_REBUILD=true
 else
-    echo "==> Skipping rebuild - no source changes and binary exists"
+    echo "==> Build Decision: Skip Rebuild"
+    echo "    Binary exists and source unchanged"
 fi
 
 echo ""
 
 if [[ "$SHOULD_REBUILD" == "true" ]]; then
     # Build updates
-    echo "==> Building updates..."
+    echo "==> Building"
     cd "$BUILD_DIR"
     
     if [[ "$CLEAN_BUILD" == "true" ]]; then
-        echo "    Performing clean build (removing build directory)..."
+        echo "    Mode: Clean build (removing build directory)"
         # Remove entire build directory to force CMake regeneration
         if [[ -d "$BUILD_DIR/build" ]]; then
             rm -rf "$BUILD_DIR/build"
             echo "    Removed: $BUILD_DIR/build"
         fi
         if bash build.sh $PLATFORM static; then
-            echo "    Clean build successful"
+            echo "    ✓ Clean build successful"
         else
-            echo "    Build failed!"
+            echo "    ✗ Build failed!"
             exit 1
         fi
     else
         if bash build.sh $PLATFORM static; then
-            echo "    Build successful"
+            echo "    ✓ Build successful"
         else
-            echo "    Build failed!"
+            echo "    ✗ Build failed!"
             exit 1
         fi
     fi
@@ -526,9 +535,9 @@ else
 fi
 
 # Create spotconnect directory (ensure it exists before running)
-echo "==> Preparing runtime environment..."
+echo "==> Runtime Preparation"
 mkdir -p "$SPOTCONNECT_DIR"
-echo "    Created: $SPOTCONNECT_DIR"
+echo "    Directory: $SPOTCONNECT_DIR"
 
 # Remove old crash file from previous session
 if [[ -f "/tmp/spotupnp-crash-latest.txt" ]]; then
@@ -670,12 +679,13 @@ fi
 echo ""
 
 # Run updated version
-echo "==> Starting $BINARY_NAME under GDB (development mode)..."
+echo "==> Starting Application"
+echo "    Binary: $BINARY_NAME"
 echo "    Config: $CONFIG_FILE"
-echo "    Log file: $LOG_FILE (stdout + stderr)"
-echo "    GDB log: $GDB_LOG (crash artifacts)"
-echo "    Working directory: $(dirname "$BINARY_PATH")"
-echo "    Mode: Auto-run under GDB with persistent connection"
+echo "    Log file: $LOG_FILE"
+echo "    GDB log: $GDB_LOG"
+echo "    Working dir: $(dirname "$BINARY_PATH")"
+echo "    Mode: Development (GDB with crash detection)"
 echo ""
 
 cd "$(dirname "$BINARY_PATH")"
@@ -714,6 +724,9 @@ echo "    Starting program under GDB in background..."
 # Enable unbuffered logging for development (forces fflush after each log line)
 export CSPOT_UNBUFFERED=1
 
+# Enable debug file logging for cspot component
+export CSPOT_DEBUG_FILES=1
+
 # Disable shell buffering: -i0 = unbuffered stdin, -o0 = unbuffered stdout, -e0 = unbuffered stderr
 stdbuf -i0 -o0 -e0 gdb -q -x "$GDB_COMMANDS" "./$BINARY_NAME" >> "$LOG_FILE" 2>&1 &
 
@@ -726,15 +739,15 @@ echo ""
 # Check if the actual binary process is running (not just GDB wrapper)
 if pgrep -f "spotupnp-.*-static" > /dev/null; then
     ACTUAL_PID=$(pgrep -f "spotupnp-.*-static")
-    echo "==> Program started successfully under GDB"
+    echo "==> Status: Running"
     echo "    Process PID: $ACTUAL_PID"
     echo "    GDB wrapper PID: $GDB_PID"
     echo ""
-    echo "==> Monitoring"
-    echo "    Logs: tail -f $LOG_FILE"
+    echo "==> Monitor & Control"
+    echo "    View logs: tail -f $LOG_FILE"
     echo "    Stop: pkill -TERM -f 'spotupnp-.*-static'"
 else
-    echo "==> ERROR: Program failed to start"
+    echo "==> Status: Failed to Start"
     echo "    Check logs: tail $LOG_FILE"
     if [[ -f "$GDB_LOG" ]]; then
         echo "    Crash log: $GDB_LOG"

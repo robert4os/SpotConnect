@@ -178,9 +178,10 @@ CSpotPlayer::~CSpotPlayer() {
     // unlock ourselves as we might be waiting
     clientConnected.give();
 
-    // Clear the callback to avoid further invocations
+    // Stop TrackPlayer task BEFORE clearing callbacks to prevent bad_function_call
     if (spirc && spirc->getTrackPlayer()) {
-        spirc->getTrackPlayer()->setDataCallback(nullptr);
+        spirc->getTrackPlayer()->stop();  // Stops task and waits for it to finish
+        spirc->getTrackPlayer()->setDataCallback(nullptr);  // Now safe to clear
     }
 
     // manually unregister mDNS but all other item should be deleted automatically

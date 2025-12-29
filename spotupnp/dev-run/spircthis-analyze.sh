@@ -3,45 +3,11 @@
 # spircthis-analyze.sh - SPIRC Protocol Analysis Tool
 # Analyzes SPIRC debug files to understand message flow and identify issues
 
-# Colors
-GREEN='\033[0;32m'
-YELLOW='\033[1;33m'
-RED='\033[0;31m'
-BLUE='\033[0;34m'
-NC='\033[0m' # No Color
+SPIRC_FILE="${1:-/tmp/spotupnp-device-spirc-dc419c953f5e3538855ab5271478674248463917177.txt}"
 
-# Required arguments
-SPIRC_FILE=""
-
-# Parse arguments
-while [[ $# -gt 0 ]]; do
-    case $1 in
-        --file)
-            SPIRC_FILE="$2"
-            shift 2
-            ;;
-        *)
-            echo "Error: Unknown argument: $1"
-            echo ""
-            echo "Usage: $0 --file <spirc-file>"
-            echo ""
-            echo "Required:"
-            echo "  --file <spirc-file>     Path to SPIRC debug file to analyze"
-            exit 1
-            ;;
-    esac
-done
-
-# Validate required argument
-if [[ -z "$SPIRC_FILE" ]]; then
-    echo "Error: --file is required"
-    echo ""
-    echo "Usage: $0 --file <spirc-file>"
-    exit 1
-fi
-
-if [[ ! -f "$SPIRC_FILE" ]]; then
+if [ ! -f "$SPIRC_FILE" ]; then
     echo "Error: SPIRC debug file not found: $SPIRC_FILE"
+    echo "Usage: $0 [spirc-debug-file]"
     exit 1
 fi
 

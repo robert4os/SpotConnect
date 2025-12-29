@@ -454,6 +454,71 @@ echo ""
 # Check for common issues
 echo "=== ISSUE DETECTION ==="
 
+# Pause Position Drift Detection
+echo "Checking for pause position drift..."
+awk '
+BEGIN {
+    state = "none"
+    msg_type = ""
+    in_pos = -1
+    out_pos = -1
+    drift_detected = 0
+}
+
+/^=== INCOMING FRAME ===/ {
+    state = "incoming"
+    msg_type = ""
+    in_pos = -1
+    next
+}
+
+/^=== OUTGOING FRAME ===/ {
+    state = "outgoing"
+    out_pos = -1
+    next
+}
+
+state == "incoming" && /^Message Type: Pause/ {
+    msg_type = "Pause"
+    next
+}
+
+state == "incoming" && /^Position:/ && !/Top-level/ && !/Measured/ {
+    in_pos = $2
+    gsub(" ms", "", in_pos)
+    next
+}
+
+state == "outgoing" && /^Position:/ && !/Top-level/ && !/Measured/ {
+    if (msg_type == "Pause" && in_pos >= 0) {
+        out_pos = $2
+        gsub(" ms", "", out_pos)
+        
+        diff = out_pos - in_pos
+        if (diff > 5000) {
+            drift_detected++
+            printf "  ✗ PAUSE POSITION DRIFT: Incoming Pause at %d ms, we reported %d ms (drift: +%.1f seconds)\n", 
+                   in_pos, out_pos, diff/1000
+            print "    This indicates position clock continued running while paused!"
+            print "    Root cause: State::Paused adds elapsed time even when already paused"
+        }
+        
+        # Reset after processing this pair
+        msg_type = ""
+        in_pos = -1
+    }
+    next
+}
+
+END {
+    if (drift_detected == 0) {
+        print "  ✓ No pause position drift detected"
+    }
+}
+' "$SPIRC_FILE"
+
+echo ""
+
 # Check if position field mismatch could cause issues
 POSITION_ZERO_COUNT=$(awk '/^=== INCOMING FRAME ===/{flag=1; next} /^=== OUTGOING FRAME ===/{flag=0} flag && /^Message Type: Load/{load=1} load && /^Top-level Position.*0 ms/{count++} /^Position:/ && !/Top-level/{load=0} END{print count+0}' "$SPIRC_FILE")
 
@@ -466,10 +531,11 @@ else
 fi
 
 # Check for unexpected position changes (excluding Seek commands and repeat loops)
-echo ""
+echo "Checking for unexpected position jumps..."
 awk '
 BEGIN {
     prev_out_pos = -1
+    prev_out_status = ""
     rapid_changes = 0
     seek_pending = 0
     repeat_enabled = 0
@@ -502,6 +568,12 @@ incoming && /^Repeat: false/ {
     next
 }
 
+outgoing && /^Status:/ {
+    out_status = $2
+    gsub("[()]", "", out_status)
+    next
+}
+
 outgoing && /^Position:/ && !/Top-level/ && !/Measured/ {
     pos = $2
     gsub(" ms", "", pos)
@@ -511,10 +583,16 @@ outgoing && /^Position:/ && !/Top-level/ && !/Measured/ {
         # Check for unexpected jumps, but ignore loop restarts (large backward jump to 0 with repeat enabled)
         is_loop_restart = (prev_out_pos > 10000 && pos == 0 && repeat_enabled)
         
-        if (diff < -1000 && !is_loop_restart) {
+        # Check for forward jump while paused (pause position drift symptom)
+        if (diff > 5000 && out_status == "Paused" && prev_out_status == "Paused") {
+            rapid_changes++
+            printf "  ✗ Position jumped forward while paused: %d ms → %d ms (Δ +%.1f seconds)\n", 
+                   prev_out_pos, pos, diff/1000
+            print "    Position should not increase while paused!"
+        } else if (diff < -1000 && !is_loop_restart) {
             rapid_changes++
             print "  ⚠ Unexpected position jump backward: " prev_out_pos " ms → " pos " ms (Δ " diff " ms)"
-        } else if (diff > 30000) {
+        } else if (diff > 30000 && out_status != "Paused") {
             rapid_changes++
             print "  ⚠ Unexpected position jump forward: " prev_out_pos " ms → " pos " ms (Δ " diff " ms)"
         }
@@ -526,6 +604,7 @@ outgoing && /^Position:/ && !/Top-level/ && !/Measured/ {
     }
     
     prev_out_pos = pos
+    prev_out_status = out_status
 }
 
 END {

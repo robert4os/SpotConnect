@@ -208,6 +208,78 @@ else
 fi
 echo ""
 
+# Premature EOF detection after seeks
+echo "=== SEEK TIMING ANALYSIS ==="
+SEEK_EVENTS=$(grep -n "\[SEEK\] Seeking from" "$LOG_FILE")
+if [[ -n "$SEEK_EVENTS" ]]; then
+    PREMATURE_EOF_FOUND=0
+    
+    echo "$SEEK_EVENTS" | while IFS=: read -r SEEK_LINE SEEK_CONTENT; do
+        # Extract seek target position (in ms) - format: "[SEEK] Seeking from X ms to Y ms"
+        SEEK_POS=$(echo "$SEEK_CONTENT" | grep -oP 'to \K[0-9]+(?= ms \(target)')
+        
+        # Extract timestamp
+        SEEK_TIME=$(echo "$SEEK_CONTENT" | grep -oP '^\[[0-9:\.]+\]')
+        
+        # Find track duration from nearby metadata
+        START_LINE=$((SEEK_LINE > 20 ? SEEK_LINE - 20 : 1))
+        TRACK_DURATION=$(sed -n "${START_LINE},$((SEEK_LINE + 5))p" "$LOG_FILE" | grep -E "duration_ms=|Track duration:" | tail -1 | grep -oP '(duration_ms=|Track duration: )\K[0-9]+')
+        
+        if [[ -z "$TRACK_DURATION" ]]; then
+            # Try to find duration from the session start or nearby logs
+            TRACK_DURATION=$(grep -E "duration_ms=|Track duration:" "$LOG_FILE" | grep -B5 "$SEEK_TIME" | tail -1 | grep -oP '(duration_ms=|Track duration: )\K[0-9]+')
+        fi
+        
+        # Find EOF after seek
+        EOF_LINE=$(tail -n +$SEEK_LINE "$LOG_FILE" | grep -n "EOF - expected time:" | head -1 | cut -d: -f1)
+        
+        if [[ -n "$EOF_LINE" && -n "$SEEK_POS" && -n "$TRACK_DURATION" ]]; then
+            ACTUAL_EOF_LINE=$((SEEK_LINE + EOF_LINE - 1))
+            EOF_TIME=$(sed -n "${ACTUAL_EOF_LINE}p" "$LOG_FILE" | grep -oP '^\[[0-9:\.]+\]')
+            
+            # Calculate expected remaining playback
+            REMAINING_MS=$((TRACK_DURATION - SEEK_POS))
+            REMAINING_SEC=$(awk "BEGIN {printf \"%.1f\", $REMAINING_MS / 1000.0}")
+            
+            # Extract actual playback time from seek to EOF
+            if [[ -n "$SEEK_TIME" && -n "$EOF_TIME" ]]; then
+                SEEK_SEC=$(echo "$SEEK_TIME" | sed 's/\[//; s/\]//; s/:/ /g' | awk '{print ($1 * 3600) + ($2 * 60) + $3}')
+                EOF_SEC=$(echo "$EOF_TIME" | sed 's/\[//; s/\]//; s/:/ /g' | awk '{print ($1 * 3600) + ($2 * 60) + $3}')
+                ACTUAL_PLAYBACK=$(awk "BEGIN {printf \"%.1f\", $EOF_SEC - $SEEK_SEC}")
+                
+                # Calculate difference
+                DIFF=$(awk "BEGIN {printf \"%.1f\", $REMAINING_SEC - $ACTUAL_PLAYBACK}")
+                
+                # Flag if significantly premature (>5 seconds early)
+                IS_PREMATURE=$(awk "BEGIN {print ($DIFF > 5.0)}")
+                
+                if [[ $IS_PREMATURE -eq 1 ]]; then
+                    echo -e "${RED}✗ PREMATURE EOF DETECTED${NC}"
+                    echo "  Seek position: ${SEEK_POS}ms ($(awk "BEGIN {printf \"%.1f\", $SEEK_POS / 1000.0}")s)"
+                    echo "  Track duration: ${TRACK_DURATION}ms ($(awk "BEGIN {printf \"%.1f\", $TRACK_DURATION / 1000.0}")s)"
+                    echo "  Expected remaining: ${REMAINING_SEC}s"
+                    echo "  Actual playback: ${ACTUAL_PLAYBACK}s"
+                    echo -e "  ${RED}Ended ${DIFF}s too early${NC}"
+                    echo ""
+                    echo "  Root cause: TrackPlayer decoder doesn't reset state after seek"
+                    echo "  Impact: Decoder counts full track duration instead of remaining portion"
+                    PREMATURE_EOF_FOUND=1
+                else
+                    echo -e "${GREEN}✓${NC} Seek timing OK"
+                    echo "  Seek position: ${SEEK_POS}ms, remaining: ${REMAINING_SEC}s"
+                    echo "  Actual playback: ${ACTUAL_PLAYBACK}s (difference: ${DIFF}s)"
+                fi
+            fi
+        else
+            echo "Seek detected but insufficient timing data for analysis"
+            [[ -n "$SEEK_POS" ]] && echo "  Seek position: ${SEEK_POS}ms"
+        fi
+    done
+else
+    echo "No seek operations detected"
+fi
+echo ""
+
 # Authentication and token analysis
 echo "=== AUTHENTICATION & TOKENS ==="
 NUM_CLIENTS=$(grep -c "Spotify client launched for" "$LOG_FILE")

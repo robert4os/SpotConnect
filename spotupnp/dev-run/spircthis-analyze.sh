@@ -140,14 +140,19 @@ incoming && /^Top-level Position/ {
 
 incoming && /^Position:/ && !/Top-level/ && !/Measured/ {
     state_pos = $2
-    if (msg_type == "Load" || msg_type == "Seek") {
-        print "  " msg_type ": frame.position=" frame_pos " ms, state.position_ms=" state_pos " ms"
+    if (msg_type == "Load") {
+        print "  Load: frame.position=" frame_pos " ms, state.position_ms=" state_pos " ms"
         if (frame_pos == "0" && state_pos != "0") {
-            print "    ✓ Spotify is using state.position_ms (frame.position is 0)"
-        } else if (frame_pos != "0" && state_pos == "0") {
-            print "    ⚠ Spotify is using frame.position (state.position_ms is 0)"
-        } else if (frame_pos != "0" && state_pos != "0") {
-            print "    ⚠ Both fields set (frame.position=" frame_pos ", state.position_ms=" state_pos ")"
+            print "    ✓ Load uses state.position_ms as TARGET (frame.position always 0)"
+        } else if (frame_pos != "0") {
+            print "    ⚠ Unexpected: frame.position=" frame_pos " (should be 0 for Load)"
+        }
+    } else if (msg_type == "Seek") {
+        print "  Seek: frame.position=" frame_pos " ms, state.position_ms=" state_pos " ms"
+        if (frame_pos != state_pos) {
+            print "    ✓ Seek uses frame.position=" frame_pos " as TARGET (state.position_ms=" state_pos " is CURRENT)"
+        } else {
+            print "    ⚠ Warning: Both fields same value, unclear which is target"
         }
     }
     msg_type = ""
@@ -320,6 +325,6 @@ echo "  ANALYSIS COMPLETE"
 echo "============================================"
 echo ""
 echo "Tips:"
-echo "  - Load/Seek commands: Check if state.position_ms is used (not frame.position)"
-echo "  - Mid-song takeover: Player should start at position in Load command"
-echo "  - Use getPositionFromFrame() helper for consistent position extraction"
+echo "  - Load: Uses state.position_ms as TARGET position (frame.position always 0)"
+echo "  - Seek: Uses frame.position as TARGET position (state.position_ms is CURRENT)"
+echo "  - These opposite semantics are a Spotify protocol quirk!"

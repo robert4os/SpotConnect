@@ -706,6 +706,14 @@ echo "    Clearing log file: $LOG_FILE"
 > "$LOG_FILE"
 [[ -f "$LOGTHIS_FILE" ]] && rm "$LOGTHIS_FILE"
 
+# Clear any temporary files from previous runs (truncate to keep inode for tail -f)
+if ls /tmp/spotupnp* 1> /dev/null 2>&1; then
+    echo "    Clearing temp files: /tmp/spotupnp*"
+    for file in /tmp/spotupnp*; do
+        > "$file"
+    done
+fi
+
 # Write banner to log file with clear separation from previous logs
 {
     echo -e "\033[0m"

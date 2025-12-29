@@ -8,8 +8,8 @@ RED='\033[0;31m'
 BLUE='\033[0;34m'
 NC='\033[0m' # No Color
 
-# Default log file
-LOG_FILE="$HOME/.spotconnect/spotupnp.log"
+# Required arguments
+LOG_FILE=""
 CONFIG_FILE=""
 
 # Parse arguments
@@ -24,12 +24,27 @@ while [[ $# -gt 0 ]]; do
             shift 2
             ;;
         *)
-            # Legacy: first positional argument is log file
-            LOG_FILE="$1"
-            shift
+            echo "Error: Unknown argument: $1"
+            echo ""
+            echo "Usage: $0 --file <log> [--config <config.xml>]"
+            echo ""
+            echo "Required:"
+            echo "  --file <log>     Path to log file to analyze"
+            echo ""
+            echo "Optional:"
+            echo "  --config <xml>   Path to config.xml file"
+            exit 1
             ;;
     esac
 done
+
+# Validate required argument
+if [[ -z "$LOG_FILE" ]]; then
+    echo "Error: --file is required"
+    echo ""
+    echo "Usage: $0 --file <log> [--config <config.xml>]"
+    exit 1
+fi
 
 if [[ ! -f "$LOG_FILE" ]]; then
     echo "Error: Log file not found: $LOG_FILE"

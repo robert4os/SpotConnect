@@ -10,7 +10,9 @@ This directory contains tools for rapid development iteration of the SpotConnect
 |--------|---------|-------|
 | `run.sh` | Build and run with change detection | `./run.sh [--platform x86_64] [--clean] [--restart] [--kill] [--build-only]` |
 | `logthis.sh` | Log management and analysis | `./logthis.sh [0\|1\|2]` |
-| `analyze-log.sh` | Comprehensive log analysis | `./analyze-log.sh --file <log> --config <xml>` |
+| `logthis-analyze.sh` | Comprehensive log analysis | `./logthis-analyze.sh --file <log> --config <xml>` |
+| `spircthis.sh` | SPIRC file management and analysis | `./spircthis.sh --deviceid <id> [0\|1\|2]` |
+| `spircthis-analyze.sh` | SPIRC protocol analysis | `./spircthis-analyze.sh --file <spirc-file>` |
 | `analyze-crash.sh` | Decode crash dumps | `./analyze-crash.sh` |
 
 ### Common Workflows
@@ -22,6 +24,10 @@ This directory contains tools for rapid development iteration of the SpotConnect
 ./run.sh --kill             # Kill running process only
 ./logthis.sh 1              # Snapshot current log to clipboard
 ./logthis.sh 2              # Full analysis with SPIRC debugging
+
+# SPIRC protocol analysis
+./spircthis.sh --deviceid dc419c... 1   # Snapshot SPIRC file to clipboard
+./spircthis.sh --deviceid dc419c... 2   # Analyze SPIRC protocol messages
 
 # After crash
 ./analyze-crash.sh          # Decode addresses to source locations
@@ -327,7 +333,7 @@ Unified log management tool with three modes of operation.
 - Preserves original log file
 
 **Option 2 - Analyze**:
-- Runs `analyze-log.sh` with auto-detected config
+- Runs `logthis-analyze.sh` with auto-detected config
 - Provides comprehensive playback analysis
 - Includes SPIRC protocol debugging
 - Shows flow mode behavior and efficiency
@@ -340,7 +346,7 @@ Unified log management tool with three modes of operation.
 
 ---
 
-## analyze-log.sh - Comprehensive Log Analysis
+## logthis-analyze.sh - Comprehensive Log Analysis
 
 Analyzes spotupnp logs and extracts playback metrics, configuration consistency, and SPIRC protocol behavior.
 
@@ -348,16 +354,16 @@ Analyzes spotupnp logs and extracts playback metrics, configuration consistency,
 
 ```bash
 # Auto-detect log and config
-./analyze-log.sh
+./logthis-analyze.sh
 
 # Specify files explicitly
-./analyze-log.sh --file <log> --config <config.xml>
+./logthis-analyze.sh --file <log> --config <config.xml>
 
 # Analyze specific log
-./analyze-log.sh --file /path/to/spotupnp.log
+./logthis-analyze.sh --file /path/to/spotupnp.log
 
 # Legacy format (positional argument)
-./analyze-log.sh /path/to/spotupnp.log
+./logthis-analyze.sh /path/to/spotupnp.log
 ```
 
 ### Analysis Sections
@@ -484,16 +490,96 @@ gdb path/to/spotupnp-linux-x86_64-static core.*
 
 ---
 
+## spircthis.sh - SPIRC File Management
+
+Manages SPIRC protocol debug files for analysis.
+
+### Usage
+
+```bash
+./spircthis.sh --deviceid <deviceid> 0    # Reset: Truncate SPIRC file
+./spircthis.sh --deviceid <deviceid> 1    # Snapshot: Copy to clipboard and save
+./spircthis.sh --deviceid <deviceid> 2    # Analyze: Run comprehensive analysis
+```
+
+### Features
+
+**Option 0 - Reset**:
+- Truncates `/tmp/spotupnp-device-spirc-{deviceid}.log` (preserves inode)
+- Removes `dev-run/spircthis.txt` (analysis snapshot)
+- Use before starting a new SPIRC capture session
+
+**Option 1 - Snapshot**:
+- Strips ANSI color codes for clean viewing
+- Copies to system clipboard (requires `xclip`)
+- Saves to `dev-run/spircthis.txt` for persistent analysis
+- Preserves original SPIRC file
+
+**Option 2 - Analyze**:
+- Runs `spircthis-analyze.sh` on the snapshot
+- Provides message flow timeline
+- Shows frame sequence analysis
+- Identifies protocol issues and patterns
+
+### SPIRC File Locations
+
+- **Live file**: `/tmp/spotupnp-device-spirc-{deviceid}.log` (written by application)
+- **Snapshot**: `dev-run/spircthis.txt` (cleaned, for analysis)
+
+### Device ID
+
+The device ID can be found in:
+- Your `config.xml` file: `<deviceid_prefix>` value
+- The SPIRC filename in `/tmp/spotupnp-device-spirc-*.log`
+- Application log: "Device ID" entries
+
+---
+
+## spircthis-analyze.sh - SPIRC Protocol Analysis
+
+Analyzes SPIRC protocol debug files to understand Spotify client communication.
+
+### Usage
+
+```bash
+# Analyze snapshot (after spircthis.sh 1)
+./spircthis-analyze.sh --file dev-run/spircthis.txt
+
+# Analyze live file directly
+./spircthis-analyze.sh --file /tmp/spotupnp-device-spirc-{deviceid}.log
+```
+
+### Analysis Output
+
+1. **Message Flow Timeline**: Chronological list of incoming/outgoing SPIRC frames
+2. **Frame Type Summary**: Count of each message type (Load, Notify, Play, Pause, etc.)
+3. **Position Analysis**: Track position updates and seeking behavior
+4. **State Transitions**: Playback state changes (Playing, Paused, Stopped)
+5. **Issue Detection**: Missing acknowledgments, unexpected sequences
+6. **Protocol Patterns**: Common message sequences and their meanings
+
+### SPIRC Protocol Basics
+
+- **Incoming frames**: Commands from Spotify client (Load, Play, Pause, Seek)
+- **Outgoing frames**: Status updates to Spotify (Notify with current state)
+- **Frame sequence**: Load → multiple Notify frames during playback
+- **Position tracking**: frame_position (track queue) vs state_position (playback time)
+
+---
+
 ## Files in dev-run/
 
 | File | Purpose | Created By |
 |------|---------|------------|
 | `run.sh` | Build and run script | Manual |
 | `logthis.sh` | Log management | Manual |
-| `analyze-log.sh` | Log analysis | Manual |
+| `logthis-analyze.sh` | Log analysis | Manual |
+| `spircthis.sh` | SPIRC file management | Manual |
+| `spircthis-analyze.sh` | SPIRC protocol analysis | Manual |
 | `analyze-crash.sh` | Crash decoder | Manual |
 | `config.xml` | Local device config | `run.sh` (first run) |
 | `logthis.log` | Log snapshot | `logthis.sh 1` |
+| `spircthis.txt` | SPIRC snapshot | `spircthis.sh 1` |
 | `README.md` | This file | Manual |
 
 ---

@@ -41,21 +41,21 @@ case "$1" in
         ;;
     2)
         # Analyze log file
-        if [[ -x "$SCRIPT_DIR/analyze-log.sh" ]]; then
+        if [[ -x "$SCRIPT_DIR/logthis-analyze.sh" ]]; then
             if [[ -f "$LOGTHIS_FILE" ]]; then
                 # Try to find config.xml in script directory
                 CONFIG_FILE="$SCRIPT_DIR/config.xml"
                 if [[ -f "$CONFIG_FILE" ]]; then
-                    "$SCRIPT_DIR/analyze-log.sh" --file "$LOGTHIS_FILE" --config "$CONFIG_FILE"
+                    "$SCRIPT_DIR/logthis-analyze.sh" --file "$LOGTHIS_FILE" --config "$CONFIG_FILE"
                 else
-                    "$SCRIPT_DIR/analyze-log.sh" --file "$LOGTHIS_FILE"
+                    "$SCRIPT_DIR/logthis-analyze.sh" --file "$LOGTHIS_FILE"
                 fi
             else
                 echo "Error: No snapshot found. Run './logthis.sh 1' first to create a snapshot."
                 exit 1
             fi
         else
-            echo "Error: analyze-log.sh not found or not executable"
+            echo "Error: logthis-analyze.sh not found or not executable"
             exit 1
         fi
         ;;

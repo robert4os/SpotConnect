@@ -208,6 +208,81 @@ BEGIN {
 
 echo ""
 
+# Track progression analysis
+echo "=== TRACK PROGRESSION ANALYSIS ==="
+awk '
+BEGIN {
+    prev_track_index = -1
+    track_count = 0
+    incoming = 0
+    outgoing = 0
+}
+
+/^=== INCOMING FRAME ===/ {
+    incoming = 1
+    outgoing = 0
+    next
+}
+
+/^=== OUTGOING FRAME ===/ {
+    incoming = 0
+    outgoing = 1
+    next
+}
+
+incoming && /^--- Track Queue \(([0-9]+) tracks\)/ {
+    match($0, /\(([0-9]+) tracks\)/, arr)
+    track_count = arr[1]
+    print "  Incoming Load/Replace with " track_count " tracks in queue"
+    next
+}
+
+incoming && /^\[([0-9]+)\] Track ID: ([a-f0-9]+)/ {
+    match($0, /\[([0-9]+)\] Track ID: ([a-f0-9]+)/, arr)
+    idx = arr[1]
+    track_id = arr[2]
+    marker = ($0 ~ /← CURRENT/) ? " ← CURRENT" : ""
+    if (marker != "") {
+        print "    Starting at track [" idx "]: " track_id
+    }
+    next
+}
+
+outgoing && /^Playing Track Index: ([0-9]+)/ {
+    match($0, /Playing Track Index: ([0-9]+)/, arr)
+    track_index = arr[1]
+    
+    if (prev_track_index >= 0 && track_index != prev_track_index) {
+        print "  ✓ Track transition: [" prev_track_index "] → [" track_index "] (player-driven, no incoming command)"
+    } else if (prev_track_index < 0) {
+        print "  Playing track index: [" track_index "]"
+    }
+    
+    prev_track_index = track_index
+    next
+}
+
+END {
+    if (track_count > 0 && prev_track_index >= 0) {
+        if (prev_track_index == track_count - 1) {
+            print "  ℹ Playback ended on last track [" prev_track_index "] of " track_count " tracks"
+        } else {
+            print "  ℹ Session ended at track [" prev_track_index "] of " track_count " tracks"
+        }
+    } else if (prev_track_index < 0) {
+        print "  ℹ No track progression detected (outgoing frames may not include track index)"
+    }
+    
+    if (track_count > 1 && prev_track_index >= 0) {
+        print ""
+        print "  ℹ Note: Track transitions are player-driven (automatic queue progression)."
+        print "         Spotify only sends Load frame initially; player advances through queue."
+    }
+}
+' "$SPIRC_FILE"
+
+echo ""
+
 # Repeat/Shuffle State Tracking
 echo "=== REPEAT/SHUFFLE STATE TRACKING ==="
 awk '

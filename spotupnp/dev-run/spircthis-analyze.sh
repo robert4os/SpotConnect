@@ -208,6 +208,174 @@ BEGIN {
 
 echo ""
 
+# Repeat/Shuffle State Tracking
+echo "=== REPEAT/SHUFFLE STATE TRACKING ==="
+awk '
+BEGIN {
+    repeat_state = "unknown"
+    shuffle_state = "unknown"
+    incoming = 0
+    seen_repeat = 0
+    seen_shuffle = 0
+}
+
+/^=== INCOMING FRAME ===/ {
+    incoming = 1
+    next
+}
+
+/^=== OUTGOING FRAME ===/ {
+    incoming = 0
+    next
+}
+
+incoming && /^Message Type: Repeat/ {
+    print "  Received Repeat command from Spotify"
+    next
+}
+
+incoming && /^Message Type: Shuffle/ {
+    print "  Received Shuffle command from Spotify"
+    next
+}
+
+incoming && /^Repeat: true/ {
+    if (repeat_state == "false") {
+        print "  ✓ Repeat state transition: OFF → ON"
+    } else if (!seen_repeat) {
+        print "  Repeat mode: ON (initial state)"
+    }
+    repeat_state = "true"
+    seen_repeat = 1
+    next
+}
+
+incoming && /^Repeat: false/ {
+    if (repeat_state == "true") {
+        print "  ✓ Repeat state transition: ON → OFF"
+    } else if (!seen_repeat) {
+        print "  Repeat mode: OFF (initial state)"
+    }
+    repeat_state = "false"
+    seen_repeat = 1
+    next
+}
+
+incoming && /^Shuffle: true/ {
+    if (shuffle_state == "false") {
+        print "  ✓ Shuffle state transition: OFF → ON"
+    } else if (!seen_shuffle) {
+        print "  Shuffle mode: ON (initial state)"
+    }
+    shuffle_state = "true"
+    seen_shuffle = 1
+    next
+}
+
+incoming && /^Shuffle: false/ {
+    if (shuffle_state == "true") {
+        print "  ✓ Shuffle state transition: ON → OFF"
+    } else if (!seen_shuffle) {
+        print "  Shuffle mode: OFF (initial state)"
+    }
+    shuffle_state = "false"
+    seen_shuffle = 1
+    next
+}
+
+END {
+    if (seen_repeat || seen_shuffle) {
+        print ""
+        print "  Final state:"
+        if (seen_repeat) {
+            print "    Repeat: " (repeat_state == "true" ? "ON" : "OFF")
+        }
+        if (seen_shuffle) {
+            print "    Shuffle: " (shuffle_state == "true" ? "ON" : "OFF")
+        }
+    } else {
+        print "  ℹ No repeat or shuffle state changes detected"
+    }
+}
+' "$SPIRC_FILE"
+
+echo ""
+
+# Detect repeat loops
+echo "=== LOOP DETECTION ==="
+awk '
+BEGIN {
+    prev_out_pos = -1
+    repeat_enabled = 0
+    current_track = ""
+    prev_track = ""
+    incoming = 0
+    outgoing = 0
+    loop_count = 0
+}
+
+/^=== INCOMING FRAME ===/ {
+    incoming = 1
+    outgoing = 0
+    next
+}
+
+/^=== OUTGOING FRAME ===/ {
+    incoming = 0
+    outgoing = 1
+    next
+}
+
+incoming && /^Repeat: true/ {
+    repeat_enabled = 1
+    next
+}
+
+incoming && /^Repeat: false/ {
+    repeat_enabled = 0
+    next
+}
+
+/^\[0\] Track ID: / {
+    current_track = $4
+    gsub(" ←.*", "", current_track)
+    next
+}
+
+outgoing && /^Position:/ && !/Top-level/ && !/Measured/ {
+    pos = $2
+    gsub(" ms", "", pos)
+    
+    if (prev_out_pos > 10000 && pos == 0 && repeat_enabled) {
+        loop_count++
+        if (current_track != "" && current_track == prev_track) {
+            print "  ✓ Track loop detected: position reset to 0 (repeat mode enabled)"
+            print "    Same track restarted: " current_track
+            print "    Previous position: " prev_out_pos " ms (" prev_out_pos/1000 " seconds)"
+        } else if (current_track != "" && current_track != prev_track) {
+            print "  ℹ Track transition: position reset to 0"
+            print "    Previous track: " prev_track " → New track: " current_track
+        } else {
+            print "  ✓ Loop detected: position reset to 0 (repeat mode enabled)"
+            print "    Previous position: " prev_out_pos " ms (" prev_out_pos/1000 " seconds)"
+        }
+    }
+    
+    prev_out_pos = pos
+    if (current_track != "") {
+        prev_track = current_track
+    }
+}
+
+END {
+    if (loop_count == 0) {
+        print "  ℹ No track loops detected in this session"
+    }
+}
+' "$SPIRC_FILE"
+
+echo ""
+
 # Check for common issues
 echo "=== ISSUE DETECTION ==="
 
@@ -222,21 +390,40 @@ else
     echo "  ℹ No Load frames with frame.position=0 detected"
 fi
 
-# Check for rapid position changes
+# Check for unexpected position changes (excluding Seek commands and repeat loops)
 echo ""
 awk '
 BEGIN {
     prev_out_pos = -1
     rapid_changes = 0
+    seek_pending = 0
+    repeat_enabled = 0
+}
+
+/^=== INCOMING FRAME ===/ {
+    incoming = 1
+    outgoing = 0
+    next
 }
 
 /^=== OUTGOING FRAME ===/ {
+    incoming = 0
     outgoing = 1
     next
 }
 
-/^=== INCOMING FRAME ===/ {
-    outgoing = 0
+incoming && /^Message Type: Seek/ {
+    seek_pending = 1
+    next
+}
+
+incoming && /^Repeat: true/ {
+    repeat_enabled = 1
+    next
+}
+
+incoming && /^Repeat: false/ {
+    repeat_enabled = 0
     next
 }
 
@@ -244,15 +431,23 @@ outgoing && /^Position:/ && !/Top-level/ && !/Measured/ {
     pos = $2
     gsub(" ms", "", pos)
     
-    if (prev_out_pos >= 0) {
+    if (prev_out_pos >= 0 && !seek_pending) {
         diff = pos - prev_out_pos
-        if (diff < -1000) {
+        # Check for unexpected jumps, but ignore loop restarts (large backward jump to 0 with repeat enabled)
+        is_loop_restart = (prev_out_pos > 10000 && pos == 0 && repeat_enabled)
+        
+        if (diff < -1000 && !is_loop_restart) {
             rapid_changes++
-            print "  ⚠ Position jump backward: " prev_out_pos " ms → " pos " ms (Δ " diff " ms)"
+            print "  ⚠ Unexpected position jump backward: " prev_out_pos " ms → " pos " ms (Δ " diff " ms)"
         } else if (diff > 30000) {
             rapid_changes++
-            print "  ⚠ Position jump forward: " prev_out_pos " ms → " pos " ms (Δ " diff " ms)"
+            print "  ⚠ Unexpected position jump forward: " prev_out_pos " ms → " pos " ms (Δ " diff " ms)"
         }
+    }
+    
+    # Clear seek flag after first outgoing position update
+    if (seek_pending) {
+        seek_pending = 0
     }
     
     prev_out_pos = pos
@@ -260,7 +455,7 @@ outgoing && /^Position:/ && !/Top-level/ && !/Measured/ {
 
 END {
     if (rapid_changes == 0) {
-        print "  ✓ No unusual position jumps detected"
+        print "  ✓ No unexpected position jumps detected"
     }
 }
 ' "$SPIRC_FILE"

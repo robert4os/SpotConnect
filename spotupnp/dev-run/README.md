@@ -506,13 +506,13 @@ Manages SPIRC protocol debug files for analysis.
 
 **Option 0 - Reset**:
 - Truncates `/tmp/spotupnp-device-spirc-{deviceid}.log` (preserves inode)
-- Removes `dev-run/spircthis.txt` (analysis snapshot)
+- Removes `dev-run/spircthis.log` (analysis snapshot)
 - Use before starting a new SPIRC capture session
 
 **Option 1 - Snapshot**:
 - Strips ANSI color codes for clean viewing
 - Copies to system clipboard (requires `xclip`)
-- Saves to `dev-run/spircthis.txt` for persistent analysis
+- Saves to `dev-run/spircthis.log` for persistent analysis
 - Preserves original SPIRC file
 
 **Option 2 - Analyze**:
@@ -524,7 +524,7 @@ Manages SPIRC protocol debug files for analysis.
 ### SPIRC File Locations
 
 - **Live file**: `/tmp/spotupnp-device-spirc-{deviceid}.log` (written by application)
-- **Snapshot**: `dev-run/spircthis.txt` (cleaned, for analysis)
+- **Snapshot**: `dev-run/spircthis.log` (cleaned, for analysis)
 
 ### Device ID
 
@@ -543,7 +543,7 @@ Analyzes SPIRC protocol debug files to understand Spotify client communication.
 
 ```bash
 # Analyze snapshot (after spircthis.sh 1)
-./spircthis-analyze.sh --file dev-run/spircthis.txt
+./spircthis-analyze.sh --file dev-run/spircthis.log
 
 # Analyze live file directly
 ./spircthis-analyze.sh --file /tmp/spotupnp-device-spirc-{deviceid}.log
@@ -579,7 +579,7 @@ Analyzes SPIRC protocol debug files to understand Spotify client communication.
 | `analyze-crash.sh` | Crash decoder | Manual |
 | `config.xml` | Local device config | `run.sh` (first run) |
 | `logthis.log` | Log snapshot | `logthis.sh 1` |
-| `spircthis.txt` | SPIRC snapshot | `spircthis.sh 1` |
+| `spircthis.log` | SPIRC snapshot | `spircthis.sh 1` |
 | `README.md` | This file | Manual |
 
 ---

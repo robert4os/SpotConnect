@@ -2,7 +2,7 @@
 
 # Configuration
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-SPIRCTHIS_FILE="$SCRIPT_DIR/spircthis.txt"
+SPIRCTHIS_FILE="$SCRIPT_DIR/spircthis.log"
 
 # Function to show help
 show_help() {
@@ -64,7 +64,7 @@ SPIRC_FILE="/tmp/spotupnp-device-spirc-${DEVICEID}.log"
 # Execute command
 case "$COMMAND" in
     0)
-        # Reset/truncate SPIRC file and remove spircthis.txt
+        # Reset/truncate SPIRC file and remove spircthis.log
         if [[ -f "$SPIRC_FILE" ]]; then
             echo "Truncating SPIRC file: $SPIRC_FILE"
             > "$SPIRC_FILE"
@@ -74,13 +74,13 @@ case "$COMMAND" in
         
         if [[ -f "$SPIRCTHIS_FILE" ]]; then
             rm "$SPIRCTHIS_FILE"
-            echo "SPIRC file truncated and spircthis.txt removed."
+            echo "SPIRC file truncated and spircthis.log removed."
         else
             echo "SPIRC file truncated."
         fi
         ;;
     1)
-        # Copy SPIRC file to clipboard (strip ANSI color codes) and save to spircthis.txt
+        # Copy SPIRC file to clipboard (strip ANSI color codes) and save to spircthis.log
         if [[ -f "$SPIRC_FILE" ]]; then
             sed -r 's/\x1b\[[0-9;]*m//g; s/\x1b\[//g; s/^\[[0-9;]*m//g' "$SPIRC_FILE" | tee "$SPIRCTHIS_FILE" | xclip -selection clipboard
             echo "SPIRC file copied to clipboard and saved to $SPIRCTHIS_FILE ($(wc -l < "$SPIRC_FILE") lines)"

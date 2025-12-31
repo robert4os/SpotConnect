@@ -397,8 +397,14 @@ void CSpotPlayer::trackHandler(std::string_view trackUnique) {
         flushed = false;
 #endif
 
-        // Spotify servers do not send volume at connection
-        spirc->setRemoteVolume(volume);
+        // TODO: INVESTIGATE - Volume restore on track load disabled
+        // Spotify servers don't send volume in Load frames, so this restores last known volume
+        // However, this triggers unnecessary SPIRC notify() with Playing status
+        // Volume should persist across tracks automatically (set in PlaybackState initialization)
+        // If user changes volume, it comes via SPIRC Volume frame (MessageType_kMessageTypeVolume)
+        //
+        // Original code commented out:
+        // spirc->setRemoteVolume(volume);
         break;
     }
     case cspot::SpircHandler::EventType::PLAY_PAUSE: {
@@ -508,11 +514,21 @@ void notify(CSpotPlayer *self, enum shadowEvent event, va_list args) {
         return;
     }
 
-    // volume can be handled at anytime
+    // TODO: INVESTIGATE - UPnP SHADOW_VOLUME interference disabled
+    // UPnP volume reports cause duplicate SPIRC notify() frames with Playing status
+    // Volume should be managed by Spotify client, not UPnP renderer
+    // Decoder-based timing is authoritative, UPnP events are delayed/unreliable
+    //
+    // Original code commented out:
+    // if (event == SHADOW_VOLUME) {
+    //     int volume = va_arg(args, int);
+    //     if (self->spirc) self->spirc->setRemoteVolume(volume);
+    //     self->volume = volume;
+    //     return;
+    // }
     if (event == SHADOW_VOLUME) {
         int volume = va_arg(args, int);
-        if (self->spirc) self->spirc->setRemoteVolume(volume);
-        self->volume = volume;
+        self->volume = volume;  // Keep local state, but don't notify Spotify
         return;
     }
 
@@ -537,23 +553,29 @@ void notify(CSpotPlayer *self, enum shadowEvent event, va_list args) {
             // to avoid getting time twice when starting from 0
             self->lastPosition = position | 0x01;
             position -= self->player->offset;
-            self->spirc->updatePositionMs(position);
+            // Position updates now come from decoder loop (accurate PCM-based timing)
+            // UPnP renderer position is unreliable (stuck at 0 for ~8s, then jumps)
+            // self->spirc->updatePositionMs(position);
         } else {
             self->lastPosition = position;
         }
 
         self->lastTimeStamp = now;
 
-        // in flow mode, have we reached a new track marker
-        // Only trigger if there are more markers left (not on the last track of a repeat cycle)
-        if (self->flow && self->flowMarkers.size() > 1 && self->lastPosition >= self->flowMarkers.back()) {
-            CSPOT_LOG(info, "[FLOW] Track boundary at %u ms (pos=%u, marker=%u, markers=%zu) - current: <%s>", 
-                     self->flowMarkers.back(), self->lastPosition, self->flowMarkers.back(), 
-                     self->flowMarkers.size(), self->player ? self->player->trackInfo.name.c_str() : "none");
-            self->flowMarkers.pop_back();
-            if (self->notify) self->spirc->notifyAudioReachedPlayback();
-            else self->notify = true;
-        }
+        // TODO: INVESTIGATE - Flow mode track boundary detection disabled
+        // This uses UPnP position polling to detect track boundaries in gapless playback
+        // Was triggering additional notifyAudioReachedPlayback() calls
+        // Need to investigate proper flow mode implementation with decoder-based timing
+        //
+        // Original code commented out:
+        // if (self->flow && self->flowMarkers.size() > 1 && self->lastPosition >= self->flowMarkers.back()) {
+        //     CSPOT_LOG(info, "[FLOW] Track boundary at %u ms (pos=%u, marker=%u, markers=%zu) - current: <%s>", 
+        //              self->flowMarkers.back(), self->lastPosition, self->flowMarkers.back(), 
+        //              self->flowMarkers.size(), self->player ? self->player->trackInfo.name.c_str() : "none");
+        //     self->flowMarkers.pop_back();
+        //     if (self->notify) self->spirc->notifyAudioReachedPlayback();
+        //     else self->notify = true;
+        // }
         break;
     }
     case SHADOW_TRACK: {
@@ -572,15 +594,18 @@ void notify(CSpotPlayer *self, enum shadowEvent event, va_list args) {
         // now we can set current player
         self->player = self->streamers.back();
 
-        // finally, get ready for time position and inform spotify that we are playing
-        self->lastPosition = 0;
-        if (self->notify) self->spirc->notifyAudioReachedPlayback();
-        else self->notify = true;
+        // TODO: INVESTIGATE - UPnP SHADOW_TRACK interference disabled
+        // UPnP reports track URL ~10 seconds after decoder starts (due to buffering)
+        // This was causing second notifyAudioReachedPlayback() call which reset position to 0
+        // and triggered unnecessary SPIRC notify() frame
+        // We use decoder-based timing as authoritative, not UPnP renderer position
+        // 
+        // Original code commented out:
+        // self->lastPosition = 0;
+        // if (self->notify) self->spirc->notifyAudioReachedPlayback();
+        // else self->notify = true;
 
-        // avoid weird cases where position is either random or last seek (will be corrected by SHADOW_TIME)
-        self->spirc->updatePositionMs(0);
-
-        CSPOT_LOG(info, "track %s started by URL (%d)", self->player->streamId.c_str(), self->streamers.size());
+        CSPOT_LOG(info, "track %s started by URL (%d) - UPnP notification (decoder already started)", self->player->streamId.c_str(), self->streamers.size());
         break;
     }
     case SHADOW_PLAY:
@@ -776,6 +801,10 @@ void CSpotPlayer::runTask() {
                 // exit when received an ABORT or a DISCO in ZeroConf mode 
                 while (state == LINKED) {
                     ctx->session->handlePacket();
+                    
+                    // Process debounced notifications (Phase 3 protocol compliance)
+                    if (spirc) spirc->processDebouncing();
+                    
                     if (state == DISCO && !zeroConf) state = LINKED;
                 }
             } catch (const std::exception& e) {

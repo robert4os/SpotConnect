@@ -18,8 +18,168 @@ echo "File: $SPIRC_FILE"
 echo "Size: $(wc -l < "$SPIRC_FILE") lines"
 echo ""
 
+# Comprehensive frame listing with all details
+echo "=== COMPREHENSIVE FRAME LISTING ==="
+echo ""
+printf "%-5s | %-10s | %-8s | %-5s | %-10s | %-12s | %-14s | %-15s | %-15s | %-8s | %s\n" \
+       "DIR" "TYPE" "STATUS" "TRK" "POSITION" "MEASURED_AT" "TRACK_ID" "SENDER" "RECIPIENT" "TIME" "TRIGGER"
+printf "%s+%s+%s+%s+%s+%s+%s+%s+%s+%s+%s\n" \
+       "------" "------------" "----------" "-------" "------------" "--------------" "----------------" "-----------------" "-----------------" "---------" "--------"
+
+awk '
+BEGIN {
+    direction = ""
+    type = ""
+    status = ""
+    position_ms = ""
+    measured_at = ""
+    track_idx = ""
+    track_hash = ""
+    timestamp = ""
+    device_id = ""
+    recipients = ""
+    trigger_reason = ""
+}
+
+/^=== INCOMING FRAME ===/ {
+    if (direction != "") print_frame()
+    direction = "→ IN"
+    timestamp = substr($0, 23)
+    gsub(/^[ \t]+|[ \t]+$/, "", timestamp)
+    # Extract just the time portion (HH:MM:SS)
+    match(timestamp, /[0-9][0-9]:[0-9][0-9]:[0-9][0-9]/, time_arr)
+    timestamp = time_arr[0]
+    device_id = ""
+    recipients = ""
+    trigger_reason = ""
+    next
+}
+
+/^=== OUTGOING FRAME ===/ {
+    if (direction != "") print_frame()
+    direction = "OUT→"
+    timestamp = substr($0, 23)
+    gsub(/^[ \t]+|[ \t]+$/, "", timestamp)
+    # Extract just the time portion (HH:MM:SS)
+    match(timestamp, /[0-9][0-9]:[0-9][0-9]:[0-9][0-9]/, time_arr)
+    timestamp = time_arr[0]
+    device_id = ""
+    recipients = ""
+    trigger_reason = ""
+    next
+}
+
+/^Trigger Reason:/ {
+    trigger_reason = substr($0, 16)
+    gsub(/^[ \t]+|[ \t]+$/, "", trigger_reason)
+    next
+}
+
+/^Device ID:/ {
+    device_id = $3
+    # Show first 12 chars only
+    if (length(device_id) > 12) {
+        device_id = substr(device_id, 1, 12) "..."
+    }
+    next
+}
+
+/^Recipients \(0\):/ || /^\(broadcast\)/ {
+    recipients = "BROADCAST"
+    next
+}
+
+/^Recipients \([0-9]+\):/ {
+    # Extract the recipient device ID
+    recipient_id = $3
+    # Show first 12 chars only
+    if (length(recipient_id) > 12) {
+        recipients = substr(recipient_id, 1, 12) "..."
+    } else {
+        recipients = recipient_id
+    }
+    next
+}
+
+/^Message Type:/ {
+    type = $3
+    if ($4 != "") type = type " " $4
+    gsub(/[()]/, "", type)
+    next
+}
+
+/^Status:/ {
+    status = $2
+    gsub(/[()]/, "", status)
+    next
+}
+
+/^Position:/ && !/Top-level/ && !/Measured/ {
+    position_ms = $2
+    gsub(" ms", "", position_ms)
+    next
+}
+
+/^Position Measured At:/ {
+    measured_at = $4
+    # Extract last 6 digits for readability
+    if (length(measured_at) > 6) {
+        measured_at = substr(measured_at, length(measured_at)-5)
+    }
+    next
+}
+
+/^Playing Track Index:/ {
+    track_idx = $4
+    next
+}
+
+/^\[0\] Track ID:/ {
+    track_hash = $4
+    gsub(" .*", "", track_hash)
+    if (length(track_hash) > 12) {
+        track_hash = substr(track_hash, 1, 12) "..."
+    }
+    next
+}
+
+function print_frame() {
+    # Truncate fields to fit columns
+    type_str = substr(type, 1, 10)
+    status_str = substr(status, 1, 8)
+    trigger_str = substr(trigger_reason, 1, 30)
+    
+    # Format position with ms suffix
+    pos_str = (position_ms != "") ? position_ms : ""
+    
+    # Format: direction | type | status | track_idx | position | measured_at | track_hash | sender | recipient | timestamp | trigger
+    printf "%-5s | %-10s | %-8s | %-5s | %-10s | %-12s | %-14s | %-15s | %-15s | %-8s | %s\n", 
+           direction, type_str, status_str, track_idx, pos_str, measured_at, track_hash, device_id, recipients, timestamp, trigger_str
+    
+    # Reset for next frame
+    direction = ""
+    type = ""
+    status = ""
+    position_ms = ""
+    measured_at = ""
+    track_idx = ""
+    track_hash = ""
+    timestamp = ""
+    device_id = ""
+    recipients = ""
+    trigger_reason = ""
+}
+
+END {
+    if (direction != "") print_frame()
+}
+' "$SPIRC_FILE"
+
+echo ""
+echo ""
+
 # Extract message flow with position information
-echo "=== MESSAGE FLOW TIMELINE ==="
+echo "=== MESSAGE FLOW TIMELINE (SUMMARY) ==="
 awk '
 BEGIN {
     direction = ""
@@ -637,6 +797,11 @@ awk '
     next
 }
 ' "$SPIRC_FILE"
+echo ""
+echo "  ℹ Note: SPIRC is a broadcast protocol - we receive frames from ALL devices."
+echo "         Our device should only process frames addressed to us (TARGETED)"
+echo "         or BROADCAST frames. Notify frames from other devices are logged"
+echo "         but only used for takeover detection."
 
 echo ""
 

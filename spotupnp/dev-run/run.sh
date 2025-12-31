@@ -365,15 +365,19 @@ if [[ "$SOURCE_CHANGED" == "true" || "$CONFIG_CHANGED" == "true" ]]; then
     SOMETHING_CHANGED=true
 fi
 
-# If restart flag is set, we'll always restart
-if [[ "$RESTART" == "true" ]]; then
+# If restart or clean build flag is set, we'll always proceed
+if [[ "$RESTART" == "true" || "$CLEAN_BUILD" == "true" ]]; then
     if [[ "$PROCESS_RUNNING" == "false" ]]; then
-        echo "==> Restart requested, but no process running"
+        if [[ "$RESTART" == "true" ]]; then
+            echo "==> Restart requested, but no process running"
+        else
+            echo "==> Clean build requested, but no process running"
+        fi
         echo "    Will start the process..."
     fi
     # Continue to handle process killing and starting below
 elif [[ "$SOMETHING_CHANGED" == "false" && "$PROCESS_RUNNING" == "true" ]]; then
-    # If nothing changed and process is running (and not restart), abort
+    # If nothing changed and process is running (and not restart/clean), abort
     # Clear log file before exiting (process keeps running)
     echo "==> Clearing Logs"
     echo "    Log file: $LOG_FILE"
@@ -466,7 +470,11 @@ fi
 
 # Decide whether to rebuild
 SHOULD_REBUILD=false
-if [[ "$SOURCE_CHANGED" == "true" ]]; then
+if [[ "$CLEAN_BUILD" == "true" ]]; then
+    echo "==> Build Decision: Rebuild Required"
+    echo "    Reason: Clean build requested (--clean flag)"
+    SHOULD_REBUILD=true
+elif [[ "$SOURCE_CHANGED" == "true" ]]; then
     echo "==> Build Decision: Rebuild Required"
     echo "    Reason: Source code changed"
     SHOULD_REBUILD=true

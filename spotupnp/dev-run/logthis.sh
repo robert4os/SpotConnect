@@ -5,35 +5,58 @@ SPOTCONNECT_DIR="$HOME/.spotconnect"
 LOG_FILE="$SPOTCONNECT_DIR/spotupnp.log"
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 LOGTHIS_FILE="$SCRIPT_DIR/logthis.log"
+LOG_MARKER_FILE="/tmp/.logthis_line_marker"
 
 # Function to show help
 show_help() {
     echo "Usage: $0 {0|1|2}"
     echo ""
-    echo "  0  - Reset (clear) the log file"
-    echo "  1  - Snapshot current log file and copy to clipboard"
-    echo "  2  - Analyze log file and show summary"
+    echo "  0  - Mark current position in log file (set snapshot start point)"
+    echo "  1  - Snapshot log from marked position and copy to clipboard"
+    echo "  2  - Analyze snapshot and show summary"
     echo ""
 }
 
 # Check argument
 case "$1" in
     0)
-        # Reset log file and remove logthis.log
-        echo "Clearing log file: $LOG_FILE"
-        > "$LOG_FILE"
+        # Mark current line number in log file (for subsequent snapshots)
+        if [[ -f "$LOG_FILE" ]]; then
+            CURRENT_LINES=$(wc -l < "$LOG_FILE")
+            echo "$CURRENT_LINES" > "$LOG_MARKER_FILE"
+            echo "Marked position at line $CURRENT_LINES in log file"
+            echo "Next snapshot (option 1) will capture logs from this point forward."
+        else
+            echo "0" > "$LOG_MARKER_FILE"
+            echo "Log file not found, marker set to line 0"
+        fi
         if [[ -f "$LOGTHIS_FILE" ]]; then
             rm "$LOGTHIS_FILE"
-            echo "Log file cleared and logthis.log removed."
-        else
-            echo "Log file cleared."
+            echo "Previous snapshot removed."
         fi
         ;;
     1)
-        # Copy log file to clipboard (strip ANSI color codes) and save to logthis.log
+        # Copy log file from marker position to clipboard (strip ANSI color codes) and save to logthis.log
         if [[ -f "$LOG_FILE" ]]; then
-            sed -r 's/\x1b\[[0-9;]*m//g; s/\x1b\[//g; s/^\[[0-9;]*m//g' "$LOG_FILE" | tee "$LOGTHIS_FILE" | xclip -selection clipboard
-            echo "Log file copied to clipboard and saved to $LOGTHIS_FILE ($(wc -l < "$LOG_FILE") lines)"
+            # Read marker (start from line 0 if no marker exists)
+            START_LINE=0
+            if [[ -f "$LOG_MARKER_FILE" ]]; then
+                START_LINE=$(cat "$LOG_MARKER_FILE")
+            fi
+            
+            TOTAL_LINES=$(wc -l < "$LOG_FILE")
+            LINES_TO_CAPTURE=$((TOTAL_LINES - START_LINE))
+            
+            if [[ $LINES_TO_CAPTURE -gt 0 ]]; then
+                tail -n "$LINES_TO_CAPTURE" "$LOG_FILE" | \
+                    sed -r 's/\x1b\[[0-9;]*m//g; s/\x1b\[//g; s/^\[[0-9;]*m//g' | \
+                    tee "$LOGTHIS_FILE" | xclip -selection clipboard
+                echo "Captured $LINES_TO_CAPTURE lines (from line $START_LINE to $TOTAL_LINES)"
+                echo "Snapshot saved to $LOGTHIS_FILE and copied to clipboard"
+            else
+                echo "No new log lines since marker at line $START_LINE (current: $TOTAL_LINES lines)"
+                exit 1
+            fi
         else
             echo "Error: Log file not found: $LOG_FILE"
             exit 1

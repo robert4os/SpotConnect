@@ -12,9 +12,9 @@ show_help() {
     echo "  --deviceid <deviceid>  Device ID for SPIRC file identification"
     echo ""
     echo "Commands:"
-    echo "  0  - Reset (clear/truncate) the SPIRC file"
-    echo "  1  - Snapshot current SPIRC file and copy to clipboard"
-    echo "  2  - Analyze SPIRC file and show summary"
+    echo "  0  - Mark current position in SPIRC file (set snapshot start point)"
+    echo "  1  - Snapshot SPIRC from marked position and copy to clipboard"
+    echo "  2  - Analyze snapshot and show summary"
     echo ""
     echo "Example:"
     echo "  $0 --deviceid dc419c953f5e3538855ab5271478674248463917177 1"
@@ -60,30 +60,48 @@ fi
 
 # Build SPIRC file path
 SPIRC_FILE="/tmp/spotupnp-device-spirc-${DEVICEID}.log"
+SPIRC_MARKER_FILE="/tmp/.spircthis_line_marker_${DEVICEID}"
 
 # Execute command
 case "$COMMAND" in
     0)
-        # Reset/truncate SPIRC file and remove spircthis.log
+        # Mark current line number in SPIRC file (for subsequent snapshots)
         if [[ -f "$SPIRC_FILE" ]]; then
-            echo "Truncating SPIRC file: $SPIRC_FILE"
-            > "$SPIRC_FILE"
+            CURRENT_LINES=$(wc -l < "$SPIRC_FILE")
+            echo "$CURRENT_LINES" > "$SPIRC_MARKER_FILE"
+            echo "Marked position at line $CURRENT_LINES in SPIRC file"
+            echo "Next snapshot (option 1) will capture SPIRC frames from this point forward."
         else
-            echo "SPIRC file does not exist: $SPIRC_FILE"
+            echo "0" > "$SPIRC_MARKER_FILE"
+            echo "SPIRC file not found, marker set to line 0"
         fi
-        
         if [[ -f "$SPIRCTHIS_FILE" ]]; then
             rm "$SPIRCTHIS_FILE"
-            echo "SPIRC file truncated and spircthis.log removed."
-        else
-            echo "SPIRC file truncated."
+            echo "Previous snapshot removed."
         fi
         ;;
     1)
-        # Copy SPIRC file to clipboard (strip ANSI color codes) and save to spircthis.log
+        # Copy SPIRC file from marker position to clipboard (strip ANSI color codes) and save to spircthis.log
         if [[ -f "$SPIRC_FILE" ]]; then
-            sed -r 's/\x1b\[[0-9;]*m//g; s/\x1b\[//g; s/^\[[0-9;]*m//g' "$SPIRC_FILE" | tee "$SPIRCTHIS_FILE" | xclip -selection clipboard
-            echo "SPIRC file copied to clipboard and saved to $SPIRCTHIS_FILE ($(wc -l < "$SPIRC_FILE") lines)"
+            # Read marker (start from line 0 if no marker exists)
+            START_LINE=0
+            if [[ -f "$SPIRC_MARKER_FILE" ]]; then
+                START_LINE=$(cat "$SPIRC_MARKER_FILE")
+            fi
+            
+            TOTAL_LINES=$(wc -l < "$SPIRC_FILE")
+            LINES_TO_CAPTURE=$((TOTAL_LINES - START_LINE))
+            
+            if [[ $LINES_TO_CAPTURE -gt 0 ]]; then
+                tail -n "$LINES_TO_CAPTURE" "$SPIRC_FILE" | \
+                    sed -r 's/\x1b\[[0-9;]*m//g; s/\x1b\[//g; s/^\[[0-9;]*m//g' | \
+                    tee "$SPIRCTHIS_FILE" | xclip -selection clipboard
+                echo "Captured $LINES_TO_CAPTURE lines (from line $START_LINE to $TOTAL_LINES)"
+                echo "Snapshot saved to $SPIRCTHIS_FILE and copied to clipboard"
+            else
+                echo "No new SPIRC frames since marker at line $START_LINE (current: $TOTAL_LINES lines)"
+                exit 1
+            fi
         else
             echo "Error: SPIRC file not found: $SPIRC_FILE"
             exit 1

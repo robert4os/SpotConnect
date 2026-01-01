@@ -413,19 +413,12 @@ void CSpotPlayer::trackHandler(std::string_view trackUnique) {
                 volume = (upnpVolume * UINT16_MAX) / maxVolume;
                 CSPOT_LOG(info, "[VOLUME] Converted to Spotify: %d (0x%04x)", volume, volume);
             } else {
-                CSPOT_LOG(error, "[VOLUME] CtrlGetVolume returned -1, volume remains uninitialized");
+                CSPOT_LOG(error, "[VOLUME] CtrlGetVolume returned -1, using 10%% of max");
+                volume = UINT16_MAX / 10;
             }
         }
 
         // Only restore volume if we have a valid value
-        if (volume >= 0) {
-            spirc->setRemoteVolume(volume);
-            CSPOT_LOG(info, "[VOLUME] Restored volume %d to Spotify PlaybackState", volume);
-        } else {
-            CSPOT_LOG(error, "[VOLUME] Failed to get initial volume from speaker, using 10% of max");
-            volume = UINT16_MAX / 10;
-        }
-        break;
         spirc->setRemoteVolume(volume);
         break;
     }

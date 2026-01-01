@@ -80,9 +80,9 @@ BEGIN {
 
 /^Device ID:/ {
     device_id = $3
-    # Show first 12 chars only
+    # Show last 12 chars only (more significant)
     if (length(device_id) > 12) {
-        device_id = substr(device_id, 1, 12) "..."
+        device_id = "..." substr(device_id, length(device_id)-11)
     }
     next
 }
@@ -95,9 +95,9 @@ BEGIN {
 /^Recipients \([0-9]+\):/ {
     # Extract the recipient device ID
     recipient_id = $3
-    # Show first 12 chars only
+    # Show last 12 chars only (more significant)
     if (length(recipient_id) > 12) {
-        recipients = substr(recipient_id, 1, 12) "..."
+        recipients = "..." substr(recipient_id, length(recipient_id)-11)
     } else {
         recipients = recipient_id
     }
@@ -141,7 +141,7 @@ BEGIN {
     track_hash = $4
     gsub(" .*", "", track_hash)
     if (length(track_hash) > 12) {
-        track_hash = substr(track_hash, 1, 12) "..."
+        track_hash = "..." substr(track_hash, length(track_hash)-11)
     }
     next
 }

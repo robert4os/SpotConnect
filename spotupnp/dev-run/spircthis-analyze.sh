@@ -21,10 +21,10 @@ echo ""
 # Comprehensive frame listing with all details
 echo "=== COMPREHENSIVE FRAME LISTING ==="
 echo ""
-printf "%-5s | %-10s | %-8s | %-5s | %-10s | %-12s | %-14s | %-15s | %-15s | %-8s | %s\n" \
-       "DIR" "TYPE" "STATUS" "TRK" "POSITION" "MEASURED_AT" "TRACK_ID" "SENDER" "RECIPIENT" "TIME" "TRIGGER"
-printf "%s+%s+%s+%s+%s+%s+%s+%s+%s+%s+%s\n" \
-       "------" "------------" "----------" "-------" "------------" "--------------" "----------------" "-----------------" "-----------------" "---------" "--------"
+printf "%-5s | %-10s | %-8s | %-5s | %-6s | %-10s | %-12s | %-14s | %-15s | %-15s | %-8s | %s\n" \
+       "DIR" "TYPE" "STATUS" "TRK" "VOL" "POSITION" "MEASURED_AT" "TRACK_ID" "SENDER" "RECIPIENT" "TIME" "TRIGGER"
+printf "%s+%s+%s+%s+%s+%s+%s+%s+%s+%s+%s+%s\n" \
+       "------" "------------" "----------" "-------" "--------" "------------" "--------------" "----------------" "-----------------" "-----------------" "---------" "--------"
 
 awk '
 BEGIN {
@@ -39,6 +39,7 @@ BEGIN {
     device_id = ""
     recipients = ""
     trigger_reason = ""
+    volume = ""
 }
 
 /^=== INCOMING FRAME ===/ {
@@ -52,6 +53,7 @@ BEGIN {
     device_id = ""
     recipients = ""
     trigger_reason = ""
+    volume = ""
     next
 }
 
@@ -66,6 +68,7 @@ BEGIN {
     device_id = ""
     recipients = ""
     trigger_reason = ""
+    volume = ""
     next
 }
 
@@ -143,6 +146,11 @@ BEGIN {
     next
 }
 
+/^Volume:/ {
+    volume = $2
+    next
+}
+
 function print_frame() {
     # Truncate fields to fit columns
     type_str = substr(type, 1, 10)
@@ -152,9 +160,12 @@ function print_frame() {
     # Format position with ms suffix
     pos_str = (position_ms != "") ? position_ms : ""
     
-    # Format: direction | type | status | track_idx | position | measured_at | track_hash | sender | recipient | timestamp | trigger
-    printf "%-5s | %-10s | %-8s | %-5s | %-10s | %-12s | %-14s | %-15s | %-15s | %-8s | %s\n", 
-           direction, type_str, status_str, track_idx, pos_str, measured_at, track_hash, device_id, recipients, timestamp, trigger_str
+    # Format volume
+    vol_str = (volume != "") ? volume : ""
+    
+    # Format: direction | type | status | track_idx | volume | position | measured_at | track_hash | sender | recipient | timestamp | trigger
+    printf "%-5s | %-10s | %-8s | %-5s | %-6s | %-10s | %-12s | %-14s | %-15s | %-15s | %-8s | %s\n", 
+           direction, type_str, status_str, track_idx, vol_str, pos_str, measured_at, track_hash, device_id, recipients, timestamp, trigger_str
     
     # Reset for next frame
     direction = ""
@@ -168,6 +179,7 @@ function print_frame() {
     device_id = ""
     recipients = ""
     trigger_reason = ""
+    volume = ""
 }
 
 END {

@@ -133,6 +133,7 @@ private:
     void eventHandler(std::unique_ptr<cspot::SpircHandler::Event> event);
     void trackHandler(std::string_view trackUnique);
     void enableZeroConf(void);
+    void initializeVolume(const char* reason);
 
     void runTask();
 public:
@@ -399,26 +400,8 @@ void CSpotPlayer::trackHandler(std::string_view trackUnique) {
 #endif
 
         // Lazy initialize volume from UPnP device on first playback
-        // TODO this does not seem to work yet, maybe more time has to pass into the track?
         if (volume < 0) {
-            // Cast shadow back to Device to query current UPnP volume
-            struct sMR* Device = (struct sMR*) shadow;
-            int upnpVolume = CtrlGetVolume(Device);
-            int maxVolume = CtrlGetMaxVolume(Device);
-            
-            CSPOT_LOG(info, "[VOLUME] Lazy init from UPnP device: upnp_volume=%d, max_volume=%d",
-                     upnpVolume, maxVolume);
-            
-            if (upnpVolume >= 0) {
-                // Convert UPnP (0..max_volume) to Spotify (0..65535)
-                volume = (upnpVolume * UINT16_MAX) / maxVolume;
-                CSPOT_LOG(info, "[VOLUME] Converted to Spotify: %d (0x%04x)", volume, volume);
-            } else {
-                CSPOT_LOG(error, "[VOLUME] CtrlGetVolume returned -1, using 10%% of max");
-                volume = UINT16_MAX / 10;
-            }
-
-            spirc->setRemoteVolume(volume);
+            initializeVolume("Lazy init on PLAYBACK_START");
         }
         break;
     }
@@ -426,6 +409,12 @@ void CSpotPlayer::trackHandler(std::string_view trackUnique) {
         std::scoped_lock lock(playerMutex);
         isPaused = std::get<bool>(event->data);
         CSPOT_LOG(info, isPaused ? "Pause" : "Play");
+        
+        // Re-initialize volume if needed (e.g., after renderer sent volume=0)
+        if (!isPaused && volume < 0) {
+            initializeVolume("Re-init on resume");
+        }
+        
         if (player || !streamers.empty()) {
             shadowRequest(shadow, isPaused ? SPOT_PAUSE : SPOT_PLAY);
         }
@@ -554,11 +543,11 @@ void notify(CSpotPlayer *self, enum shadowEvent event, va_list args) {
         auto now = gettime_ms64();
 
         if (self->lastPosition == 0 || 
-            self->lastPosition + now - self->lastTimeStamp > position + 5000 ||
-            self->lastPosition + now - self->lastTimeStamp + 5000 < position) {
+            self->lastPosition + (now - self->lastTimeStamp) > position + 5000 ||
+            self->lastPosition + (now - self->lastTimeStamp) + 5000 < position) {
 
             CSPOT_LOG(info, "adjusting real position %u from %u (offset is %" PRId64 ")", position,
-                            self->lastPosition ? (uint32_t) (self->lastPosition + now - self->lastTimeStamp) : 0, 
+                            self->lastPosition ? (uint32_t) (self->lastPosition + (now - self->lastTimeStamp)) : 0, 
                             self->player->offset);
 
             // to avoid getting time twice when starting from 0
@@ -657,6 +646,27 @@ bool getMetaForUrl(CSpotPlayer* self, const std::string url, metadata_t* metadat
         }
     }
     return false;
+}
+
+void CSpotPlayer::initializeVolume(const char* reason) {
+    // Cast shadow back to Device to query current UPnP volume
+    struct sMR* Device = (struct sMR*) shadow;
+    int upnpVolume = CtrlGetVolume(Device);
+    int maxVolume = CtrlGetMaxVolume(Device);
+    
+    CSPOT_LOG(info, "[VOLUME] %s: upnp_volume=%d, max_volume=%d",
+             reason, upnpVolume, maxVolume);
+    
+    if (upnpVolume >= 0) {
+        // Convert UPnP (0..max_volume) to Spotify (0..65535)
+        volume = (upnpVolume * UINT16_MAX) / maxVolume;
+        CSPOT_LOG(info, "[VOLUME] Converted to Spotify: %d (0x%04x)", volume, volume);
+    } else {
+        CSPOT_LOG(error, "[VOLUME] CtrlGetVolume returned -1, using 10%% of max");
+        volume = UINT16_MAX / 10;
+    }
+
+    spirc->setRemoteVolume(volume);
 }
 
 void CSpotPlayer::enableZeroConf(void) {

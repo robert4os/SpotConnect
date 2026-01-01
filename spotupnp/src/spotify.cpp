@@ -417,9 +417,9 @@ void CSpotPlayer::trackHandler(std::string_view trackUnique) {
                 CSPOT_LOG(error, "[VOLUME] CtrlGetVolume returned -1, using 10%% of max");
                 volume = UINT16_MAX / 10;
             }
-        }
 
-        spirc->setRemoteVolume(volume);
+            spirc->setRemoteVolume(volume);
+        }
         break;
     }
     case cspot::SpircHandler::EventType::PLAY_PAUSE: {
@@ -531,14 +531,17 @@ void notify(CSpotPlayer *self, enum shadowEvent event, va_list args) {
     }
     
     if (event == SHADOW_VOLUME) {
-         int volume = va_arg(args, int);
-         if (self->spirc) self->spirc->setRemoteVolume(volume);
-        
-         CSPOT_LOG(debug, "[VOLUME] notify() SHADOW_VOLUME: volume=%d (0x%04x), args=%p", 
-                  volume, volume, &args);
-        
-         self->volume = volume;
-         return;
+        int volume = va_arg(args, int);
+        if (volume == 0) {
+            self->volume = -1;
+            CSPOT_LOG(debug, "[VOLUME] Renderer reported 0, marking for re-init");
+        } else {
+            if (self->spirc) self->spirc->setRemoteVolume(volume);
+            self->volume = volume;
+            CSPOT_LOG(debug, "[VOLUME] notify() SHADOW_VOLUME: volume=%d (0x%04x)", 
+                     volume, volume);
+        }
+        return;
     }
     if (!self->spirc) return;
     

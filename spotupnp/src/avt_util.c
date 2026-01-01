@@ -300,6 +300,11 @@ int CtrlGetVolume(struct sMR *Device) {
 }
 
 /*----------------------------------------------------------------------------*/
+int CtrlGetMaxVolume(struct sMR *Device) {
+	return Device->Config.MaxVolume;
+}
+
+/*----------------------------------------------------------------------------*/
 char *GetProtocolInfo(struct sMR *Device) {
 	IXML_Document *ActionNode, *Response = NULL;
 	struct sService *Service = &Device->Service[CNX_MGR_IDX];

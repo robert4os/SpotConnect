@@ -41,14 +41,15 @@ extern "C" {
 #include "metadata.h"
 #include "codecs.h"
 
-// Forward declaration for struct from spotupnp.h
-struct sMRConfig;
+// Forward declarations for UPnP volume query
+struct sMR;
+extern "C" int CtrlGetVolume(struct sMR* Device);
+extern "C" int CtrlGetMaxVolume(struct sMR* Device);
 
 // External global variables from spotupnp.c
 extern "C" {
     extern char glCredentialsPath[256];  // STR_LEN from spotupnp.h
     extern char glDeviceIdPrefix[256];   // STR_LEN from spotupnp.h
-    extern struct sMRConfig glMRConfig;  // Global config structure
     extern log_level main_loglevel;
 }
 
@@ -98,7 +99,7 @@ private:
     shadowMutex playerMutex;
     bell::WrappedSemaphore clientConnected;
     std::string streamTrackUnique;
-    int volume = 0;
+    int volume = -1;
     int32_t startOffset;
 
     uint64_t lastTimeStamp;
@@ -397,14 +398,35 @@ void CSpotPlayer::trackHandler(std::string_view trackUnique) {
         flushed = false;
 #endif
 
-        // TODO: INVESTIGATE - Volume restore on track load disabled
-        // Spotify servers don't send volume in Load frames, so this restores last known volume
-        // However, this triggers unnecessary SPIRC notify() with Playing status
-        // Volume should persist across tracks automatically (set in PlaybackState initialization)
-        // If user changes volume, it comes via SPIRC Volume frame (MessageType_kMessageTypeVolume)
-        //
-        // Original code commented out:
-        // spirc->setRemoteVolume(volume);
+        // Lazy initialize volume from UPnP device on first playback
+        if (volume < 0) {
+            // Cast shadow back to Device to query current UPnP volume
+            struct sMR* Device = (struct sMR*) shadow;
+            int upnpVolume = CtrlGetVolume(Device);
+            int maxVolume = CtrlGetMaxVolume(Device);
+            
+            CSPOT_LOG(info, "[VOLUME] Lazy init from UPnP device: upnp_volume=%d, max_volume=%d",
+                     upnpVolume, maxVolume);
+            
+            if (upnpVolume >= 0) {
+                // Convert UPnP (0..max_volume) to Spotify (0..65535)
+                volume = (upnpVolume * UINT16_MAX) / maxVolume;
+                CSPOT_LOG(info, "[VOLUME] Converted to Spotify: %d (0x%04x)", volume, volume);
+            } else {
+                CSPOT_LOG(error, "[VOLUME] CtrlGetVolume returned -1, volume remains uninitialized");
+            }
+        }
+
+        // Only restore volume if we have a valid value
+        if (volume >= 0) {
+            spirc->setRemoteVolume(volume);
+            CSPOT_LOG(info, "[VOLUME] Restored volume %d to Spotify PlaybackState", volume);
+        } else {
+            CSPOT_LOG(error, "[VOLUME] Failed to get initial volume from speaker, using 10% of max");
+            volume = UINT16_MAX / 10;
+        }
+        break;
+        spirc->setRemoteVolume(volume);
         break;
     }
     case cspot::SpircHandler::EventType::PLAY_PAUSE: {
@@ -507,31 +529,24 @@ void CSpotPlayer::trackHandler(std::string_view trackUnique) {
 }
 
 // this is called with shared mutex locked
+// Receives shadow events from shadow player (e.g. upnp)
 void notify(CSpotPlayer *self, enum shadowEvent event, va_list args) {
     // should not happen, but at least trace it
     if (!self) {
         CSPOT_LOG(error, "shadow event %d for NULL", event);
         return;
     }
-
-    // TODO: INVESTIGATE - UPnP SHADOW_VOLUME interference disabled
-    // UPnP volume reports cause duplicate SPIRC notify() frames with Playing status
-    // Volume should be managed by Spotify client, not UPnP renderer
-    // Decoder-based timing is authoritative, UPnP events are delayed/unreliable
-    //
-    // Original code commented out:
-    // if (event == SHADOW_VOLUME) {
-    //     int volume = va_arg(args, int);
-    //     if (self->spirc) self->spirc->setRemoteVolume(volume);
-    //     self->volume = volume;
-    //     return;
-    // }
+    
     if (event == SHADOW_VOLUME) {
-        int volume = va_arg(args, int);
-        self->volume = volume;  // Keep local state, but don't notify Spotify
-        return;
+         int volume = va_arg(args, int);
+         if (self->spirc) self->spirc->setRemoteVolume(volume);
+        
+         CSPOT_LOG(debug, "[VOLUME] notify() SHADOW_VOLUME: volume=%d (0x%04x), args=%p", 
+                  volume, volume, &args);
+        
+         self->volume = volume;
+         return;
     }
-
     if (!self->spirc) return;
     
     switch (event) {
@@ -780,6 +795,15 @@ void CSpotPlayer::runTask() {
             shadowRequest(shadow, SPOT_CREDENTIALS, ctx->getCredentialsJson().c_str());
 
             spirc = std::make_unique<cspot::SpircHandler>(ctx);
+
+            // Log debouncing status
+            if (cspot::SpircHandler::UPDATE_STATE_DELAY_MS == 0 || cspot::SpircHandler::VOLUME_UPDATE_DELAY_MS == 0) {
+                CSPOT_LOG(error, "SPIRC notification debouncing is DISABLED (state=%ums, volume=%ums)", 
+                         cspot::SpircHandler::UPDATE_STATE_DELAY_MS, cspot::SpircHandler::VOLUME_UPDATE_DELAY_MS);
+            } else {
+                CSPOT_LOG(info, "SPIRC notification debouncing active (state=%ums, volume=%ums)", 
+                         cspot::SpircHandler::UPDATE_STATE_DELAY_MS, cspot::SpircHandler::VOLUME_UPDATE_DELAY_MS);
+            }
 
             // set call back to calculate a hash on trackId
             spirc->getTrackPlayer()->setDataCallback(

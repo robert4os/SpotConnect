@@ -35,6 +35,7 @@ void	AVTActionFlush(cross_queue_t *Queue);
 int 	CtrlSetVolume(struct sMR *Device, uint8_t Volume, void *Cookie);
 int 	CtrlSetMute(struct sMR *Device, bool Mute, void *Cookie);
 int 	CtrlGetVolume(struct sMR *Device);
+int 	CtrlGetMaxVolume(struct sMR *Device);
 int 	CtrlGetGroupVolume(struct sMR *Device);
 char*	GetProtocolInfo(struct sMR *Device);
 

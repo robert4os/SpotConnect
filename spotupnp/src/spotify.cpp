@@ -399,6 +399,7 @@ void CSpotPlayer::trackHandler(std::string_view trackUnique) {
 #endif
 
         // Lazy initialize volume from UPnP device on first playback
+        // TODO this does not seem to work yet, maybe more time has to pass into the track?
         if (volume < 0) {
             // Cast shadow back to Device to query current UPnP volume
             struct sMR* Device = (struct sMR*) shadow;
@@ -418,7 +419,6 @@ void CSpotPlayer::trackHandler(std::string_view trackUnique) {
             }
         }
 
-        // Only restore volume if we have a valid value
         spirc->setRemoteVolume(volume);
         break;
     }

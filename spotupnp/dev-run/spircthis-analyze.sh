@@ -3,11 +3,45 @@
 # spircthis-analyze.sh - SPIRC Protocol Analysis Tool
 # Analyzes SPIRC debug files to understand message flow and identify issues
 
-SPIRC_FILE="${1:-/tmp/spotupnp-device-spirc-dc419c953f5e3538855ab5271478674248463917177.txt}"
+# Required arguments
+SPIRC_FILE=""
+
+# Parse arguments
+while [[ $# -gt 0 ]]; do
+    case $1 in
+        --file)
+            SPIRC_FILE="$2"
+            shift 2
+            ;;
+        *)
+            # Support legacy positional argument for backwards compatibility
+            if [[ -z "$SPIRC_FILE" ]]; then
+                SPIRC_FILE="$1"
+                shift
+            else
+                echo "Error: Unknown argument: $1"
+                echo ""
+                echo "Usage: $0 --file <spirc-file>"
+                echo "   or: $0 <spirc-file>  (legacy format)"
+                echo ""
+                echo "Required:"
+                echo "  --file <spirc-file>  Path to SPIRC debug file to analyze"
+                exit 1
+            fi
+            ;;
+    esac
+done
+
+# Default if no file specified
+if [[ -z "$SPIRC_FILE" ]]; then
+    SPIRC_FILE="/tmp/spotupnp-device-spirc-dc419c953f5e3538855ab5271478674248463917177.txt"
+fi
 
 if [ ! -f "$SPIRC_FILE" ]; then
     echo "Error: SPIRC debug file not found: $SPIRC_FILE"
-    echo "Usage: $0 [spirc-debug-file]"
+    echo ""
+    echo "Usage: $0 --file <spirc-file>"
+    echo "   or: $0 <spirc-file>  (legacy format)"
     exit 1
 fi
 

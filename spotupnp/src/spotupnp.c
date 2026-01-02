@@ -445,6 +445,39 @@ static bool _ProcessQueue(struct sMR *Device) {
 }
 
 /*----------------------------------------------------------------------------*/
+static void LogDeviceState(struct sMR *Device, struct sMR *Master, const char *eventName, double Volume, uint32_t now) {
+	if (!getenv("CSPOT_DEBUG_FILES")) return;
+	
+	FILE *stateLog = fopen("/tmp/upnp-state-indicators.log", "a");
+	if (!stateLog) return;
+	
+	const char *stateStr[] = {"UNKNOWN", "STOPPED", "PLAYING", "PAUSED", "TRANSITIONING"};
+	const char *spotStateStr[] = {"SPOT_NONE", "SPOT_PLAY", "SPOT_PAUSE", "SPOT_TRACK_INFO", "SPOT_DISC", "SPOT_FLUSH", "SPOT_VOLUME", "SPOT_LOAD", "SPOT_SEEK", "SPOT_STOP"};
+	
+	// Format timestamp like in main log file
+	struct timeval tv;
+	gettimeofday(&tv, NULL);
+	char timestamp[100];
+	strftime(timestamp, sizeof(timestamp), "[%T.", localtime(&tv.tv_sec));
+	sprintf(timestamp + strlen(timestamp), "%03ld]", (long)tv.tv_usec/1000);
+	
+	fprintf(stateLog, "\n%s === %s [%s] ===\n", timestamp, eventName, Device->friendlyName);
+	fprintf(stateLog, "Volume received: %d\n", (int)Volume);
+	fprintf(stateLog, "Current Device->Volume: %d\n", (int)Device->Volume);
+	fprintf(stateLog, "Device->State: %s\n", stateStr[Device->State]);
+	fprintf(stateLog, "Device->SpotState: %s\n", spotStateStr[Device->SpotState]);
+	fprintf(stateLog, "Device->ExpectStop: %d\n", Device->ExpectStop);
+	fprintf(stateLog, "Device->Elapsed: %u ms\n", Device->Elapsed);
+	fprintf(stateLog, "Device->ElapsedAccrued: %u ms\n", Device->ElapsedAccrued);
+	fprintf(stateLog, "VolumeStampRx: %u ms\n", Master->VolumeStampRx);
+	fprintf(stateLog, "VolumeStampTx: %u ms\n", Master->VolumeStampTx);
+	fprintf(stateLog, "now: %u ms\n", now);
+	fprintf(stateLog, "TimeSinceLastTx: %u ms\n", now > Master->VolumeStampTx ? now - Master->VolumeStampTx : 0);
+	fprintf(stateLog, "IsMaster: %s\n", Device->Master ? "no (slave)" : "yes (master)");
+	fclose(stateLog);
+}
+
+/*----------------------------------------------------------------------------*/
 static void ProcessEvent(Upnp_EventType EventType, const void *_Event, void *Cookie) {
 	UpnpEvent* Event = (UpnpEvent*)_Event;
 	struct sMR *Device = SID2Device(UpnpEvent_get_SID(Event));
@@ -470,17 +503,25 @@ static void ProcessEvent(Upnp_EventType EventType, const void *_Event, void *Coo
 		struct sMR *Master = Device->Master ? Device->Master : Device;
 		double Volume = atoi(r), GroupVolume;
 		uint32_t now = gettime_ms();
+		
+		// Debug: log all state indicators (only when CSPOT_DEBUG_FILES is set)
+		LogDeviceState(Device, Master, "Volume Event", Volume, now);
 
 		if (Volume != (int) Device->Volume && now > Master->VolumeStampTx + 1000) {
-			Device->Volume = Volume;
-			Master->VolumeStampRx = now;
-			GroupVolume = CalcGroupVolume(Master);
-			LOG_INFO("[%p]: UPnP Volume local change %d:%d (%s)", Device, (int) Volume, (int) GroupVolume, Device->Master ? "slave": "master");
-			Volume = GroupVolume < 0 ? Volume / Device->Config.MaxVolume : GroupVolume / 100;
-			spotNotify(Device->SpotPlayer, SHADOW_VOLUME, (int) (Volume * UINT16_MAX));
-			
-			// Save volume to file (also writes name for human reference)
-			SaveDeviceVolume(Device->deviceId, Device->friendlyName, (int)Device->Volume, Device->Config.MaxVolume);
+			// Skip transitional zeros completely (don't update Device->Volume, don't notify Spotify, don't save)
+			if ((int)Volume == 0 && Device->ExpectStop) {
+				LOG_DEBUG("[%p]: Ignoring transitional zero volume (ExpectStop=%d)", Device, Device->ExpectStop);
+			} else {
+				Device->Volume = Volume;
+				Master->VolumeStampRx = now;
+				GroupVolume = CalcGroupVolume(Master);
+				LOG_INFO("[%p]: UPnP Volume local change %d:%d (%s)", Device, (int) Volume, (int) GroupVolume, Device->Master ? "slave": "master");
+				Volume = GroupVolume < 0 ? Volume / Device->Config.MaxVolume : GroupVolume / 100;
+				spotNotify(Device->SpotPlayer, SHADOW_VOLUME, (int) (Volume * UINT16_MAX));
+				
+				// Save volume to file
+				SaveDeviceVolume(Device->deviceId, Device->friendlyName, (int)Device->Volume, Device->Config.MaxVolume);
+			}
 		}
 	}
 
@@ -991,6 +1032,7 @@ static void *UpdateThread(void *args) {
 						double volumeNorm = Device->Volume / (double)Device->Config.MaxVolume;
 						spotNotify(Device->SpotPlayer, SHADOW_VOLUME, (int)(volumeNorm * UINT16_MAX));
 					} else {
+						// TODO
 						LOG_INFO("[%p]: No saved volume, using 10%% default: %d", Device, (int)Device->Volume);
 					}
 				}

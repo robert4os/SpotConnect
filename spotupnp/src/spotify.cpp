@@ -99,7 +99,7 @@ private:
     shadowMutex playerMutex;
     bell::WrappedSemaphore clientConnected;
     std::string streamTrackUnique;
-    int volume = 0; // -1;
+    int volume = 0;
     int32_t startOffset;
 
     uint64_t lastTimeStamp;

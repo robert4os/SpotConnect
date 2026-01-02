@@ -1027,14 +1027,14 @@ static void *UpdateThread(void *args) {
 					if (savedVolume >= 0) {
 						Device->Volume = savedVolume;
 						LOG_INFO("[%p]: Volume restored from file: %d", Device, savedVolume);
-						
-						// Sync to SpotPlayer immediately (converts to Spotify range)
-						double volumeNorm = Device->Volume / (double)Device->Config.MaxVolume;
-						spotNotify(Device->SpotPlayer, SHADOW_VOLUME, (int)(volumeNorm * UINT16_MAX));
 					} else {
-						// TODO
+						// Device->Volume already set to 10% default at device initialization (line 1178)
 						LOG_INFO("[%p]: No saved volume, using 10%% default: %d", Device, (int)Device->Volume);
 					}
+					
+					// Sync volume to SpotPlayer in both cases (converts to Spotify range)
+					double volumeNorm = Device->Volume / (double)Device->Config.MaxVolume;
+					spotNotify(Device->SpotPlayer, SHADOW_VOLUME, (int)(volumeNorm * UINT16_MAX));
 				}
 			}
 

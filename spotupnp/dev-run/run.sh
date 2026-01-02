@@ -551,10 +551,14 @@ echo "==> Runtime Preparation"
 mkdir -p "$SPOTCONNECT_DIR"
 echo "    Directory: $SPOTCONNECT_DIR"
 
-# Remove old crash file from previous session
+# Remove old crash files from previous session
 if [[ -f "/tmp/spotupnp-crash-latest.txt" ]]; then
     rm -f "/tmp/spotupnp-crash-latest.txt"
     echo "    Removed old crash dump"
+fi
+if [[ -f "$SPOTCONNECT_DIR/core-crash" ]]; then
+    rm -f "$SPOTCONNECT_DIR/core-crash"
+    echo "    Removed old core-crash file"
 fi
 
 # Check and report core dump status

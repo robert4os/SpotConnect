@@ -99,7 +99,7 @@ private:
     shadowMutex playerMutex;
     bell::WrappedSemaphore clientConnected;
     std::string streamTrackUnique;
-    int volume = -1;
+    int volume = 0; // -1;
     int32_t startOffset;
 
     uint64_t lastTimeStamp;
@@ -133,7 +133,6 @@ private:
     void eventHandler(std::unique_ptr<cspot::SpircHandler::Event> event);
     void trackHandler(std::string_view trackUnique);
     void enableZeroConf(void);
-    void initializeVolume(const char* reason);
 
     void runTask();
 public:
@@ -398,23 +397,13 @@ void CSpotPlayer::trackHandler(std::string_view trackUnique) {
         notify = !flushed;
         flushed = false;
 #endif
-
-        // Lazy initialize volume from UPnP device on first playback
-        if (volume < 0) {
-            initializeVolume("Lazy init on PLAYBACK_START");
-        }
         break;
     }
     case cspot::SpircHandler::EventType::PLAY_PAUSE: {
         std::scoped_lock lock(playerMutex);
         isPaused = std::get<bool>(event->data);
         CSPOT_LOG(info, isPaused ? "Pause" : "Play");
-        
-        // Re-initialize volume if needed (e.g., after renderer sent volume=0)
-        if (!isPaused && volume < 0) {
-            initializeVolume("Re-init on resume");
-        }
-        
+                
         if (player || !streamers.empty()) {
             shadowRequest(shadow, isPaused ? SPOT_PAUSE : SPOT_PLAY);
         }
@@ -521,15 +510,9 @@ void notify(CSpotPlayer *self, enum shadowEvent event, va_list args) {
     
     if (event == SHADOW_VOLUME) {
         int volume = va_arg(args, int);
-        if (volume == 0) {
-            self->volume = -1;
-            CSPOT_LOG(debug, "[VOLUME] Renderer reported 0, marking for re-init");
-        } else {
-            if (self->spirc) self->spirc->setRemoteVolume(volume);
-            self->volume = volume;
-            CSPOT_LOG(debug, "[VOLUME] notify() SHADOW_VOLUME: volume=%d (0x%04x)", 
-                     volume, volume);
-        }
+        if (self->spirc) self->spirc->setRemoteVolume(volume);
+        self->volume = volume;
+        CSPOT_LOG(debug, "[VOLUME] SHADOW_VOLUME: volume=%d (0x%04x)", volume, volume);
         return;
     }
     if (!self->spirc) return;
@@ -648,27 +631,6 @@ bool getMetaForUrl(CSpotPlayer* self, const std::string url, metadata_t* metadat
     return false;
 }
 
-void CSpotPlayer::initializeVolume(const char* reason) {
-    // Cast shadow back to Device to query current UPnP volume
-    struct sMR* Device = (struct sMR*) shadow;
-    int upnpVolume = CtrlGetVolume(Device);
-    int maxVolume = CtrlGetMaxVolume(Device);
-    
-    CSPOT_LOG(info, "[VOLUME] %s: upnp_volume=%d, max_volume=%d",
-             reason, upnpVolume, maxVolume);
-    
-    if (upnpVolume >= 0) {
-        // Convert UPnP (0..max_volume) to Spotify (0..65535)
-        volume = (upnpVolume * UINT16_MAX) / maxVolume;
-        CSPOT_LOG(info, "[VOLUME] Converted to Spotify: %d (0x%04x)", volume, volume);
-    } else {
-        CSPOT_LOG(error, "[VOLUME] CtrlGetVolume returned -1, using 10%% of max");
-        volume = UINT16_MAX / 10;
-    }
-
-    spirc->setRemoteVolume(volume);
-}
-
 void CSpotPlayer::enableZeroConf(void) {
     int serverPort = 0;
     server = std::make_unique<bell::BellHTTPServer>(serverPort);
@@ -694,27 +656,14 @@ void CSpotPlayer::runTask() {
     isRunning = true;
     bool zeroConf = false;
     
-    // Device ID prefix already generated and saved by spotupnp.c if it was empty
-    std::string deviceIdPrefix(glDeviceIdPrefix);
-    blob = std::make_unique<cspot::LoginBlob>(name, deviceIdPrefix);
-    CSPOT_LOG(info, "Using device ID prefix: %s", glDeviceIdPrefix);
+    // Full deviceId already built in C code (spotupnp.c) and passed via 'id' parameter
+    // Format: deviceIdPrefix + hash(name) = 40 chars total
+    blob = std::make_unique<cspot::LoginBlob>(name, id);
+    CSPOT_LOG(info, "Using full deviceId: %s", id.c_str());
     
-    // Create device info file now that we have deviceId
+    // Try to load stored zeroconf credentials
     if (*glCredentialsPath) {
         std::string deviceId = blob->getDeviceId();
-        std::string infoFile = std::string(glCredentialsPath) + "/spotupnp-device-info-" + deviceId + ".json";
-        std::ofstream outFile(infoFile);
-        if (outFile.is_open()) {
-            outFile << "{\n"
-                    << "  \"name\": \"" << name << "\",\n"
-                    << "  \"deviceId\": \"" << deviceId << "\"\n"
-                    << "}\n";
-            outFile.close();
-            chmod(infoFile.c_str(), 0600);
-            CSPOT_LOG(info, "Created device info file: %s", infoFile.c_str());
-        }
-        
-        // Try to load stored zeroconf credentials
         std::string credFile = std::string(glCredentialsPath) + "/spotupnp-device-zconf-" + deviceId + ".json";
         std::ifstream credIn(credFile);
         if (credIn.is_open()) {
@@ -823,6 +772,11 @@ void CSpotPlayer::runTask() {
                     eventHandler(std::move(event));
             });
 
+            // Apply initial volume directly to playbackState (before Load frames arrive)
+            // This ensures the first SPIRC Notify frame contains the correct saved volume
+            CSPOT_LOG(info, "[VOLUME] Applying initial volume to playbackState: %d (0x%04x)", volume, volume);
+            spirc->getPlaybackState()->setVolume(volume);
+        
             // Start handling mercury messages
             ctx->session->startTask();
 

@@ -23,6 +23,9 @@ struct sMR*  CURL2Device(const UpnpString *CtrlURL);
 struct sMR*  PURL2Device(const UpnpString *URL);
 struct sMR*  UDN2Device(const char *SID);
 
+int LoadDeviceVolume(const char *deviceId);
+void SaveDeviceVolume(const char *deviceId, const char *name, int volume, int maxVolume);
+
 struct sService* EventURL2Service(const UpnpString *URL, struct sService *s);
 
 int  XMLFindAndParseService(IXML_Document* DescDoc, const char* location, const char* serviceTypeBase, char** serviceType, 

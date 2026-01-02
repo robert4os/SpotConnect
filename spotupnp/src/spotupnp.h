@@ -73,6 +73,7 @@ struct sMR {
 	char UDN			[RESOURCE_LENGTH];
 	char DescDocURL		[RESOURCE_LENGTH];
 	char friendlyName	[STR_LEN];
+	char deviceId		[41];	// Full Spotify device ID (40 chars + null)
 	enum eMRstate 	State;
 	bool			ExpectStop;
 	struct spotPlayer *SpotPlayer;

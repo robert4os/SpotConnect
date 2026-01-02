@@ -15,6 +15,7 @@
 #include "upnptools.h"
 #include "cross_thread.h"
 #include "cross_log.h"
+#include "cJSON.h"
 #include "avt_util.h"
 #include "mr_util.h"
 
@@ -463,4 +464,151 @@ char *uPNPEvent2String(Upnp_EventType S) {
 	}
 
 	return "";
+}
+
+/*----------------------------------------------------------------------------*/
+int LoadDeviceVolume(const char *deviceId) {
+	extern char glCredentialsPath[];
+	
+	if (!deviceId || !*deviceId || !*glCredentialsPath) return -1;
+	
+	char filepath[512];
+	snprintf(filepath, sizeof(filepath), "%s/spotupnp-device-info-%s.json", 
+			 glCredentialsPath, deviceId);
+	
+	LOG_INFO("LoadDeviceVolume: attempting to load from %s", filepath);
+	
+	FILE *file = fopen(filepath, "r");
+	if (!file) {
+		LOG_INFO("LoadDeviceVolume: file not found");
+		return -1;
+	}
+	
+	fseek(file, 0, SEEK_END);
+	long fsize = ftell(file);
+	fseek(file, 0, SEEK_SET);
+	
+	char *content = malloc(fsize + 1);
+	(void)!fread(content, 1, fsize, file);
+	content[fsize] = '\0';
+	fclose(file);
+	
+	LOG_INFO("LoadDeviceVolume: file content: %s", content);
+	
+	cJSON *root = cJSON_Parse(content);
+	free(content);
+	
+	if (!root) {
+		LOG_ERROR("LoadDeviceVolume: JSON parse failed");
+		return -1;
+	}
+	
+	// Extract volume only (ignore name - it's just for human reference)
+	cJSON *volumeObj = cJSON_GetObjectItem(root, "volume");
+	int volume = -1;
+	
+	if (volumeObj) {
+		cJSON *lastValue = cJSON_GetObjectItem(volumeObj, "lastValue");
+		if (lastValue && cJSON_IsNumber(lastValue)) {
+			volume = lastValue->valueint;
+			LOG_INFO("LoadDeviceVolume: parsed volume = %d", volume);
+		} else {
+			LOG_ERROR("LoadDeviceVolume: lastValue not found or not a number");
+		}
+	} else {
+		LOG_ERROR("LoadDeviceVolume: volume object not found");
+	}
+	
+	cJSON_Delete(root);
+	return volume;
+}
+
+/*----------------------------------------------------------------------------*/
+void SaveDeviceVolume(const char *deviceId, const char *name, int volume, int maxVolume) {
+	extern char glCredentialsPath[];
+	
+	if (!deviceId || !*deviceId || !*glCredentialsPath) return;
+	
+	char filepath[512];
+	snprintf(filepath, sizeof(filepath), "%s/spotupnp-device-info-%s.json",
+			 glCredentialsPath, deviceId);
+	
+	cJSON *root = NULL;
+	
+	// Try to load existing file
+	FILE *file = fopen(filepath, "r");
+	if (file) {
+		fseek(file, 0, SEEK_END);
+		long fsize = ftell(file);
+		fseek(file, 0, SEEK_SET);
+		
+		char *content = malloc(fsize + 1);
+		(void)!fread(content, 1, fsize, file);
+		content[fsize] = '\0';
+		fclose(file);
+		
+		root = cJSON_Parse(content);
+		free(content);
+	}
+	
+	// Create new JSON if parsing failed or file doesn't exist
+	if (!root) {
+		root = cJSON_CreateObject();
+	}
+	
+	// Always update name and deviceId (for human reference in file)
+	if (cJSON_GetObjectItem(root, "name")) {
+		cJSON_ReplaceItemInObject(root, "name", cJSON_CreateString(name ? name : "Unknown"));
+	} else {
+		cJSON_AddStringToObject(root, "name", name ? name : "Unknown");
+	}
+	
+	if (cJSON_GetObjectItem(root, "deviceId")) {
+		cJSON_ReplaceItemInObject(root, "deviceId", cJSON_CreateString(deviceId));
+	} else {
+		cJSON_AddStringToObject(root, "deviceId", deviceId);
+	}
+	
+	// Update/create volume section
+	cJSON *volumeObj = cJSON_GetObjectItem(root, "volume");
+	if (!volumeObj) {
+		volumeObj = cJSON_CreateObject();
+		cJSON_AddItemToObject(root, "volume", volumeObj);
+	}
+	
+	// Add or replace volume values
+	if (cJSON_GetObjectItem(volumeObj, "lastValue")) {
+		cJSON_ReplaceItemInObject(volumeObj, "lastValue", cJSON_CreateNumber(volume));
+	} else {
+		cJSON_AddNumberToObject(volumeObj, "lastValue", volume);
+	}
+	
+	if (cJSON_GetObjectItem(volumeObj, "maxVolume")) {
+		cJSON_ReplaceItemInObject(volumeObj, "maxVolume", cJSON_CreateNumber(maxVolume));
+	} else {
+		cJSON_AddNumberToObject(volumeObj, "maxVolume", maxVolume);
+	}
+	
+	if (cJSON_GetObjectItem(volumeObj, "timestamp")) {
+		cJSON_ReplaceItemInObject(volumeObj, "timestamp", cJSON_CreateNumber(gettime_ms()));
+	} else {
+		cJSON_AddNumberToObject(volumeObj, "timestamp", (double)gettime_ms());
+	}
+	
+	// Write atomically (temp file + rename)
+	char temppath[512];
+	snprintf(temppath, sizeof(temppath), "%s.tmp", filepath);
+	
+	char *json_str = cJSON_Print(root);
+	file = fopen(temppath, "w");
+	if (file) {
+		fputs(json_str, file);
+		fclose(file);
+		chmod(temppath, 0600);
+		rename(temppath, filepath);
+		LOG_SDEBUG("Saved volume %d for device '%s' to %s", volume, name, filepath);
+	}
+	
+	free(json_str);
+	cJSON_Delete(root);
 }

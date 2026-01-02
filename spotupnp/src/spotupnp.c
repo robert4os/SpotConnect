@@ -389,6 +389,9 @@ void shadowRequest(struct shadowPlayer *shadow, enum spotEvent event, ...) {
 			Device->Volume = Volume * Device->Config.MaxVolume;
 			CtrlSetVolume(Device, Device->Volume + 0.5, Device->seqN++);
 			LOG_INFO("[%p]: Volume[0..100] %d", Device, (int) Device->Volume);
+			
+			// Save volume to file (volume changed from Spotify app)
+			SaveDeviceVolume(Device->deviceId, Device->friendlyName, (int)(Device->Volume + 0.5), Device->Config.MaxVolume);
 		} else {
 			double Ratio = GroupVolume ? (Volume * Device->Config.MaxVolume) / GroupVolume : 0;
 			
@@ -403,6 +406,9 @@ void shadowRequest(struct shadowPlayer *shadow, enum spotEvent event, ...) {
 				
 				CtrlSetVolume(p, p->Volume + 0.5, p->seqN++);
 				LOG_INFO("[%p]: Volume[0..100] %d:%d", p, (int) p->Volume, GroupVolume);
+				
+				// Save volume to file for this device (group volume scenario)
+				SaveDeviceVolume(p->deviceId, p->friendlyName, (int)(p->Volume + 0.5), p->Config.MaxVolume);
 			}
 		}
 		break;
@@ -472,6 +478,9 @@ static void ProcessEvent(Upnp_EventType EventType, const void *_Event, void *Coo
 			LOG_INFO("[%p]: UPnP Volume local change %d:%d (%s)", Device, (int) Volume, (int) GroupVolume, Device->Master ? "slave": "master");
 			Volume = GroupVolume < 0 ? Volume / Device->Config.MaxVolume : GroupVolume / 100;
 			spotNotify(Device->SpotPlayer, SHADOW_VOLUME, (int) (Volume * UINT16_MAX));
+			
+			// Save volume to file (also writes name for human reference)
+			SaveDeviceVolume(Device->deviceId, Device->friendlyName, (int)Device->Volume, Device->Config.MaxVolume);
 		}
 	}
 
@@ -883,9 +892,21 @@ static void *UpdateThread(void *args) {
 							LOG_INFO("[%p]: Sonos %s is now master", Device, Device->Config.Name);
 							pthread_mutex_lock(&Device->Mutex);
 							Device->Master = NULL;
-							char id[6 * 2 + 1] = { 0 };
-							for (int i = 0; i < 6; i++) sprintf(id + i * 2, "%02x", Device->Config.mac[i]);
-							Device->SpotPlayer = spotCreatePlayer(Device->Config.Name, id, Device->Credentials, glHost, Device->Config.VorbisRate,
+							
+							// Build full deviceId: prefix + hash(name) with natural decimal length
+							char deviceIdPrefix[25];
+							strncpy(deviceIdPrefix, glDeviceIdPrefix, 24);
+							deviceIdPrefix[24] = '\0';
+							
+							size_t nameHash = 0;
+							for (const char* p = Device->Config.Name; *p; p++) {
+								nameHash = nameHash * 31 + (unsigned char)*p;
+							}
+							
+							sprintf(Device->deviceId, "%s%zu", deviceIdPrefix, nameHash);
+							LOG_INFO("[%p]: Built deviceId: %s", Device, Device->deviceId);
+							
+							Device->SpotPlayer = spotCreatePlayer(Device->Config.Name, Device->deviceId, Device->Credentials, glHost, Device->Config.VorbisRate,
 																  Device->Config.Codec, Device->Config.Flow, Device->Config.HTTPContentLength, 
 																  Device->Config.CacheMode, (struct shadowPlayer*) Device, &Device->Mutex);
 							pthread_mutex_unlock(&Device->Mutex);
@@ -937,18 +958,43 @@ static void *UpdateThread(void *args) {
 				glUpdated = true;
 			
 				if (AddMRDevice(Device, UDN, DescDoc, Update->Data) && !glDiscovery) {
-					// create a new Spotify Connect device
-					char id[6*2+1] = { 0 };
-					for (int i = 0; i < 6; i++) sprintf(id + i*2, "%02x", Device->Config.mac[i]);
-					Device->SpotPlayer = spotCreatePlayer(Device->Config.Name, id, Device->Credentials, glHost, Device->Config.VorbisRate,
-														  Device->Config.Codec, Device->Config.Flow, Device->Config.HTTPContentLength, 
-														  Device->Config.CacheMode, (struct shadowPlayer*) Device, &Device->Mutex);
-					if (!Device->SpotPlayer) {
-						LOG_ERROR("[%p]: cannot create Spotify instance (%s)", Device, Device->Config.Name);
-						pthread_mutex_lock(&Device->Mutex);
-						DelMRDevice(Device);
+				// Build full deviceId: deviceIdPrefix + hash(name)
+				char deviceIdPrefix[25];
+				strncpy(deviceIdPrefix, glDeviceIdPrefix, 24);
+				deviceIdPrefix[24] = '\0';
+				
+				size_t nameHash = 0;
+				for (const char* p = Device->Config.Name; *p; p++) {
+					nameHash = nameHash * 31 + (unsigned char)*p;
+				}
+				
+				sprintf(Device->deviceId, "%s%zu", deviceIdPrefix, nameHash);
+				LOG_INFO("[%p]: Built deviceId: %s", Device, Device->deviceId);
+				
+				// create a new Spotify Connect device
+				Device->SpotPlayer = spotCreatePlayer(Device->Config.Name, Device->deviceId, Device->Credentials, glHost, Device->Config.VorbisRate,
+													  Device->Config.Codec, Device->Config.Flow, Device->Config.HTTPContentLength, 
+													  Device->Config.CacheMode, (struct shadowPlayer*) Device, &Device->Mutex);
+				if (!Device->SpotPlayer) {
+					LOG_ERROR("[%p]: cannot create Spotify instance (%s)", Device, Device->Config.Name);
+					pthread_mutex_lock(&Device->Mutex);
+					DelMRDevice(Device);
+				} else {
+					// Load volume from file using the deviceId we just built
+					int savedVolume = LoadDeviceVolume(Device->deviceId);
+					
+					if (savedVolume >= 0) {
+						Device->Volume = savedVolume;
+						LOG_INFO("[%p]: Volume restored from file: %d", Device, savedVolume);
+						
+						// Sync to SpotPlayer immediately (converts to Spotify range)
+						double volumeNorm = Device->Volume / (double)Device->Config.MaxVolume;
+						spotNotify(Device->SpotPlayer, SHADOW_VOLUME, (int)(volumeNorm * UINT16_MAX));
+					} else {
+						LOG_INFO("[%p]: No saved volume, using 10%% default: %d", Device, (int)Device->Volume);
 					}
 				}
+			}
 
 	cleanup:
 		if (glUpdated && (glAutoSaveConfigFile || glDiscovery)) {
@@ -1088,7 +1134,9 @@ static bool AddMRDevice(struct sMR* Device, char* UDN, IXML_Document* DescDoc, c
 	}
 
 	Device->Master = GetMaster(Device, &friendlyName);
-	Device->Volume = CtrlGetVolume(Device);
+
+	// Volume will be loaded after SpotPlayer and deviceId are created
+	Device->Volume = Device->Config.MaxVolume / 10;
 
 	// set remaining items now that we are sure
 	if (*Device->Service[TOPOLOGY_IDX].ControlURL) {

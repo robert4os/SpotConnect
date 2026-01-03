@@ -305,9 +305,25 @@ void CSpotPlayer::trackHandler(std::string_view trackUnique) {
 
     // create a new streamer an run it, unless in flow mode
     if (streamers.empty() || !flow) {
+        // Wire up end-of-stream callback for immediate track-end notification
+        // This fires when HTTPstreamer finishes draining (track playback complete)
+        // Only notifies if playlistEnd=true (set by DEPLETED event for last track)
+        auto eosCallback = [this](HTTPstreamer* streamer) {
+            std::scoped_lock lock(playerMutex);
+            
+            if (playlistEnd) {
+                CSPOT_LOG(info, "[EOS_CALLBACK] Last track ended via stream completion");
+                playlistEnd = false;
+                spirc->notifyAudioEnded();
+            } else {
+                CSPOT_LOG(debug, "[EOS_CALLBACK] Track %s ended, playlist continues", 
+                          streamer->streamId.c_str());
+            }
+        };
+
         auto streamer = std::make_shared<HTTPstreamer>(addr, id, index++, codec, flow, contentLength, cacheMode, 
                                                        newTrackInfo, trackUnique, streamers.empty() ? -startOffset : 0,
-                                                       nullptr, nullptr);
+                                                       nullptr, eosCallback);
 
         CSPOT_LOG(info, "loading with id %s", streamer->streamId.c_str());
 

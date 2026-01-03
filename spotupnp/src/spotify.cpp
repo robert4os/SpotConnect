@@ -552,7 +552,7 @@ void notify(CSpotPlayer *self, enum shadowEvent event, va_list args) {
             // to avoid getting time twice when starting from 0
             self->lastPosition = position | 0x01;
             position -= self->player->offset;
-            // Position updates now come from decoder loop (accurate PCM-based timing)
+            // Position updates are event-driven (pause/resume/seek), not periodic
             // UPnP renderer position is unreliable (stuck at 0 for ~8s, then jumps)
             // self->spirc->updatePositionMs(position);
         } else {
@@ -561,20 +561,14 @@ void notify(CSpotPlayer *self, enum shadowEvent event, va_list args) {
 
         self->lastTimeStamp = now;
 
-        // TODO: INVESTIGATE - Flow mode track boundary detection disabled
-        // This uses UPnP position polling to detect track boundaries in gapless playback
-        // Was triggering additional notifyAudioReachedPlayback() calls
-        // Need to investigate proper flow mode implementation with decoder-based timing
-        //
-        // Original code commented out:
-        // if (self->flow && self->flowMarkers.size() > 1 && self->lastPosition >= self->flowMarkers.back()) {
-        //     CSPOT_LOG(info, "[FLOW] Track boundary at %u ms (pos=%u, marker=%u, markers=%zu) - current: <%s>", 
-        //              self->flowMarkers.back(), self->lastPosition, self->flowMarkers.back(), 
-        //              self->flowMarkers.size(), self->player ? self->player->trackInfo.name.c_str() : "none");
-        //     self->flowMarkers.pop_back();
-        //     if (self->notify) self->spirc->notifyAudioReachedPlayback();
-        //     else self->notify = true;
-        // }
+        if (self->flow && self->flowMarkers.size() > 1 && self->lastPosition >= self->flowMarkers.back()) {
+            CSPOT_LOG(info, "[FLOW] Track boundary at %u ms (pos=%u, marker=%u, markers=%zu) - current: <%s>", 
+                     self->flowMarkers.back(), self->lastPosition, self->flowMarkers.back(), 
+                     self->flowMarkers.size(), self->player ? self->player->trackInfo.name.c_str() : "none");
+            self->flowMarkers.pop_back();
+            if (self->notify) self->spirc->notifyAudioReachedPlayback();
+            else self->notify = true;
+        }
         break;
     }
     case SHADOW_TRACK: {
@@ -593,16 +587,12 @@ void notify(CSpotPlayer *self, enum shadowEvent event, va_list args) {
         // now we can set current player
         self->player = self->streamers.back();
 
-        // TODO: INVESTIGATE - UPnP SHADOW_TRACK interference disabled
-        // UPnP reports track URL ~10 seconds after decoder starts (due to buffering)
-        // This was causing second notifyAudioReachedPlayback() call which reset position to 0
-        // and triggered unnecessary SPIRC notify() frame
-        // We use decoder-based timing as authoritative, not UPnP renderer position
-        // 
-        // Original code commented out:
+        // Don't reset position - decoder provides accurate PCM-based position tracking
+        // Resetting to 0 conflicts with TrackPlayer's updatePositionMs() calls
+        // SHADOW_TIME handler tracks lastPosition internally but doesn't send updates to spotify (which is commented out)
         // self->lastPosition = 0;
-        // if (self->notify) self->spirc->notifyAudioReachedPlayback();
-        // else self->notify = true;
+        if (self->notify) self->spirc->notifyAudioReachedPlayback();
+        else self->notify = true;
 
         CSPOT_LOG(info, "track %s started by URL (%d) - UPnP notification (decoder already started)", self->player->streamId.c_str(), self->streamers.size());
         break;

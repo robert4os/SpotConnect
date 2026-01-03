@@ -221,6 +221,7 @@ static 	bool 	AddMRDevice(struct sMR *Device, char * UDN, IXML_Document *DescDoc
 static	bool 	isExcluded(char *Model, char *ModelNumber);
 static bool 	Start(bool cold);
 static bool 	Stop(bool exit);
+static void 	ApplyVolumeChange(struct sMR *Device, double NewVolume, uint32_t Timestamp);
 
 // functions with _ prefix means that the device mutex is expected to be locked
 static bool 	_ProcessQueue(struct sMR *Device);
@@ -551,8 +552,10 @@ static void ProcessEvent(Upnp_EventType EventType, const void *_Event, void *Coo
 	}
 
 	// Update last event received timestamp for subscription health monitoring
+	// Match by SID instead of EventURL (UpnpEvent_get_PublisherUrl doesn't exist in all libupnp versions)
+	const char *eventSID = UpnpString_get_String(UpnpEvent_get_SID(Event));
 	for (int i = 0; i < NB_SRV; i++) {
-		if (!strcmp(Device->Service[i].EventURL, UpnpString_get_String(UpnpEvent_get_PublisherUrl(Event)))) {
+		if (!strcmp(Device->Service[i].SID, eventSID)) {
 			Device->Service[i].LastEventReceivedTime = gettime_ms();
 			break;
 		}
@@ -566,15 +569,8 @@ static void ProcessEvent(Upnp_EventType EventType, const void *_Event, void *Coo
 		double Volume = atoi(r), GroupVolume;
 		uint32_t now = gettime_ms();
 		
-		// Debug: log all state indicators (only when CSPOT_DEBUG_FILES is set)
+		// Debug: log all state indicators (only when CSPOT_DEBUG_files is set)
 		LogDeviceState(Device, Master, "Volume Event", Volume, now);
-
-		// Check if previous pending volume 0 expired (process if not cancelled)
-		if (Device->HasPendingZeroVolume && now - Device->PendingZeroVolumeTime > VOLUME_ZERO_DELAY_MS) {
-			LOG_INFO("[%p]: Pending volume 0 timeout expired - processing as legitimate", Device);
-			ApplyVolumeChange(Device, 0, Device->PendingZeroVolumeTime);
-			Device->HasPendingZeroVolume = false;
-		}
 
 		if (Volume != (int) Device->Volume && now > Master->VolumeStampTx + 1000) {
 			// Hybrid temporal filtering for Volume 0

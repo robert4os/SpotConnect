@@ -209,8 +209,25 @@ HTTPstreamer::~HTTPstreamer() {
 }
 
 void HTTPstreamer::setContentLength(int64_t contentLength) {
-    // a real content-length (< 0 means estimated) might be provided by codec (offset is negative)
-    uint64_t duration = trackInfo.duration - (-offset);
+    // offset is negative for start position
+    int64_t requestedPos = -offset;
+    uint64_t trackDuration = trackInfo.duration;
+    
+    // Validate position against track duration (per librespot behavior)
+    // Position >= duration → play 0 seconds (immediate EOF)
+    uint64_t duration;
+    if (requestedPos < 0) {
+        // Shouldn't happen (offset is always negative), but handle defensively
+        CSPOT_LOG(error, "Invalid negative position %lld, starting from beginning", requestedPos);
+        duration = trackDuration;
+    } else if ((uint64_t)requestedPos >= trackDuration) {
+        CSPOT_LOG(error, "Invalid start position %lld ms exceeds track duration %llu ms, setting duration=0 (will trigger EOF)",
+                  requestedPos, trackDuration);
+        duration = 0;  // Triggers immediate EOF
+    } else {
+        duration = trackDuration - requestedPos;
+    }
+    
     int64_t length = encoder->initialize(duration);
 
     if (!length) throw std::runtime_error("can't initialize codec");

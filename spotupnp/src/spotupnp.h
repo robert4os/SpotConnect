@@ -92,6 +92,9 @@ struct sMR {
 	pthread_t 		Thread;
 	double			Volume;		// to avoid int volume being stuck at 0
 	uint32_t		VolumeStampRx, VolumeStampTx;
+	double			PendingZeroVolume;		// Volume 0 waiting to be processed (temporal filter)
+	uint32_t		PendingZeroVolumeTime;	// When pending volume 0 was received
+	bool			HasPendingZeroVolume;	// Is there a pending volume 0?
 	int				ErrorCount;
 	bool			TimeOut;
 	char 			ProtocolInfo[STR_LEN];

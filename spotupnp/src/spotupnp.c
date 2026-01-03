@@ -230,6 +230,7 @@ static bool 	_ProcessQueue(struct sMR *Device);
 #define STATE_POLL  (500)
 #define MAX_ACTION_ERRORS (5)
 #define MIN_POLL (min(TRACK_POLL, STATE_POLL))
+#define VOLUME_ZERO_DELAY_MS (2000)
 static void *MRThread(void *args) {
 	int elapsed, wakeTimer = MIN_POLL;
 	unsigned last;
@@ -248,6 +249,16 @@ static void *MRThread(void *args) {
 
 		p->StatePoll += elapsed;
 		p->TrackPoll += elapsed;
+
+		// Check for expired pending volume 0 (temporal filtering)
+		if (p->HasPendingZeroVolume) {
+			uint32_t now = gettime_ms();
+			if (now - p->PendingZeroVolumeTime > VOLUME_ZERO_DELAY_MS) {
+				LOG_INFO("[%p]: Pending volume 0 timeout in polling thread - processing", p);
+				ApplyVolumeChange(p, 0, p->PendingZeroVolumeTime);
+				p->HasPendingZeroVolume = false;
+			}
+		}
 
 		/* Should not request any status update if we are stopped, off or waiting
 		 * for an action to be performed or slave */
@@ -448,7 +459,7 @@ static bool _ProcessQueue(struct sMR *Device) {
 static void LogDeviceState(struct sMR *Device, struct sMR *Master, const char *eventName, double Volume, uint32_t now) {
 	if (!getenv("CSPOT_DEBUG_FILES")) return;
 	
-	FILE *stateLog = fopen("/tmp/upnp-state-indicators.log", "a");
+	FILE *stateLog = fopen("/tmp/spotupnp-state-indicators.log", "a");
 	if (!stateLog) return;
 	
 	const char *stateStr[] = {"UNKNOWN", "STOPPED", "PLAYING", "PAUSED", "TRANSITIONING"};
@@ -469,12 +480,28 @@ static void LogDeviceState(struct sMR *Device, struct sMR *Master, const char *e
 	fprintf(stateLog, "Device->ExpectStop: %d\n", Device->ExpectStop);
 	fprintf(stateLog, "Device->Elapsed: %u ms\n", Device->Elapsed);
 	fprintf(stateLog, "Device->ElapsedAccrued: %u ms\n", Device->ElapsedAccrued);
+	fprintf(stateLog, "Device->NextStreamUrl: %s\n", Device->NextStreamUrl ? Device->NextStreamUrl : "(null)");
 	fprintf(stateLog, "VolumeStampRx: %u ms\n", Master->VolumeStampRx);
 	fprintf(stateLog, "VolumeStampTx: %u ms\n", Master->VolumeStampTx);
 	fprintf(stateLog, "now: %u ms\n", now);
 	fprintf(stateLog, "TimeSinceLastTx: %u ms\n", now > Master->VolumeStampTx ? now - Master->VolumeStampTx : 0);
 	fprintf(stateLog, "IsMaster: %s\n", Device->Master ? "no (slave)" : "yes (master)");
 	fclose(stateLog);
+}
+
+/*----------------------------------------------------------------------------*/
+static void ApplyVolumeChange(struct sMR *Device, double NewVolume, uint32_t Timestamp) {
+	struct sMR *Master = Device->Master ? Device->Master : Device;
+	double GroupVolume;
+	
+	Device->Volume = NewVolume;
+	Master->VolumeStampRx = Timestamp;
+	GroupVolume = CalcGroupVolume(Master);
+	LOG_INFO("[%p]: UPnP Volume local change %d:%d (%s)", Device, (int)NewVolume, (int)GroupVolume, Device->Master ? "slave" : "master");
+	
+	double Volume = GroupVolume < 0 ? NewVolume / Device->Config.MaxVolume : GroupVolume / 100;
+	spotNotify(Device->SpotPlayer, SHADOW_VOLUME, (int)(Volume * UINT16_MAX));
+	SaveDeviceVolume(Device->deviceId, Device->friendlyName, (int)Device->Volume, Device->Config.MaxVolume);
 }
 
 /*----------------------------------------------------------------------------*/
@@ -499,6 +526,7 @@ static void ProcessEvent(Upnp_EventType EventType, const void *_Event, void *Coo
 
 	// Feedback volume to Spotify server
 	r = XMLGetChangeItem(VarDoc, "Volume", "channel", "Master", "val");
+
 	if (r) {
 		struct sMR *Master = Device->Master ? Device->Master : Device;
 		double Volume = atoi(r), GroupVolume;
@@ -507,20 +535,37 @@ static void ProcessEvent(Upnp_EventType EventType, const void *_Event, void *Coo
 		// Debug: log all state indicators (only when CSPOT_DEBUG_FILES is set)
 		LogDeviceState(Device, Master, "Volume Event", Volume, now);
 
+		// Check if previous pending volume 0 expired (process if not cancelled)
+		if (Device->HasPendingZeroVolume && now - Device->PendingZeroVolumeTime > VOLUME_ZERO_DELAY_MS) {
+			LOG_INFO("[%p]: Pending volume 0 timeout expired - processing as legitimate", Device);
+			ApplyVolumeChange(Device, 0, Device->PendingZeroVolumeTime);
+			Device->HasPendingZeroVolume = false;
+		}
+
 		if (Volume != (int) Device->Volume && now > Master->VolumeStampTx + 1000) {
-			// Skip transitional zeros completely (don't update Device->Volume, don't notify Spotify, don't save)
-			if ((int)Volume == 0 && Device->ExpectStop) {
-				LOG_DEBUG("[%p]: Ignoring transitional zero volume (ExpectStop=%d)", Device, Device->ExpectStop);
+			// Hybrid temporal filtering for Volume 0
+			if ((int)Volume == 0) {
+				// Process immediately for explicit stops or when already stopped
+				if (Device->ExpectStop || Device->State == STOPPED) {
+					LOG_INFO("[%p]: Volume 0 during stop - processing immediately (ExpectStop=%d, State=%d)", 
+					         Device, Device->ExpectStop, Device->State);
+					ApplyVolumeChange(Device, 0, now);
+					Device->HasPendingZeroVolume = false;  // Cancel any pending
+				} else {
+					// Might be transitional - make it pending
+					LOG_INFO("[%p]: Volume 0 pending (might be transitional) - waiting %dms", Device, VOLUME_ZERO_DELAY_MS);
+					Device->PendingZeroVolume = 0;
+					Device->PendingZeroVolumeTime = now;
+					Device->HasPendingZeroVolume = true;
+				}
 			} else {
-				Device->Volume = Volume;
-				Master->VolumeStampRx = now;
-				GroupVolume = CalcGroupVolume(Master);
-				LOG_INFO("[%p]: UPnP Volume local change %d:%d (%s)", Device, (int) Volume, (int) GroupVolume, Device->Master ? "slave": "master");
-				Volume = GroupVolume < 0 ? Volume / Device->Config.MaxVolume : GroupVolume / 100;
-				spotNotify(Device->SpotPlayer, SHADOW_VOLUME, (int) (Volume * UINT16_MAX));
-				
-				// Save volume to file
-				SaveDeviceVolume(Device->deviceId, Device->friendlyName, (int)Device->Volume, Device->Config.MaxVolume);
+				// Non-zero volume - cancel any pending and process immediately
+				if (Device->HasPendingZeroVolume) {
+					LOG_INFO("[%p]: Transitional zero cancelled by volume %d (was pending for %ums)", 
+					         Device, (int)Volume, now - Device->PendingZeroVolumeTime);
+					Device->HasPendingZeroVolume = false;
+				}
+				ApplyVolumeChange(Device, Volume, now);
 			}
 		}
 	}
@@ -764,9 +809,11 @@ int MasterHandler(Upnp_EventType EventType, const void *_Event, void *Cookie) {
 
 			s = EventURL2Service(UpnpEventSubscribe_get_PublisherUrl(_Event), Device->Service);
 			if (s != NULL) {
+				const char *eventType = (EventType == UPNP_EVENT_SUBSCRIPTION_EXPIRED) ? "EXPIRED" : "AUTORENEWAL_FAILED";
+				LOG_WARN("[%p]: Event subscription %s for %s (SID=%s), re-subscribing", 
+				         Device, eventType, s->EventURL, s->SID);
 				UpnpSubscribeAsync(glControlPointHandle, s->EventURL, s->TimeOut,
 								   MasterHandler, (void*) strdup(Device->UDN));
-				LOG_INFO("[%p]: Auto-renewal failed, re-subscribing", Device);
 			}
 
 			pthread_mutex_unlock(&Device->Mutex);
@@ -788,7 +835,8 @@ int MasterHandler(Upnp_EventType EventType, const void *_Event, void *Cookie) {
 					s->Failed = 0;
 					strcpy(s->SID, UpnpString_get_String(UpnpEventSubscribe_get_SID(_Event)));
 					s->TimeOut = UpnpEventSubscribe_get_TimeOut(_Event);
-					LOG_INFO("[%p]: subscribe success", Device);
+					LOG_INFO("[%p]: subscribe success for %s (SID=%s, timeout=%ds)", 
+					         Device, s->EventURL, s->SID, s->TimeOut);
 				} else if (s->Failed++ < 3) {
 					LOG_INFO("[%p]: subscribe fail, re-trying %u", Device, s->Failed);
 					UpnpSubscribeAsync(glControlPointHandle, s->EventURL, s->TimeOut,
@@ -1179,6 +1227,9 @@ static bool AddMRDevice(struct sMR* Device, char* UDN, IXML_Document* DescDoc, c
 
 	// Volume will be loaded after SpotPlayer and deviceId are created
 	Device->Volume = Device->Config.MaxVolume / 10;
+	Device->PendingZeroVolume = 0;
+	Device->PendingZeroVolumeTime = 0;
+	Device->HasPendingZeroVolume = false;
 
 	// set remaining items now that we are sure
 	if (*Device->Service[TOPOLOGY_IDX].ControlURL) {

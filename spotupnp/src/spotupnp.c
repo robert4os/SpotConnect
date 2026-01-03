@@ -250,9 +250,29 @@ static void *MRThread(void *args) {
 		p->StatePoll += elapsed;
 		p->TrackPoll += elapsed;
 
+		// Get current time for health checks
+		uint32_t now = gettime_ms();
+
+		// Check subscription health for services with event subscriptions
+		for (int i = 0; i < NB_SRV; i++) {
+			struct sService *s = &p->Service[i];
+			if (s->TimeOut > 0 && s->LastEventReceivedTime > 0) {
+				uint32_t age = now - s->LastEventReceivedTime;
+				// Warn if no events for 1.5x the timeout period
+				if (age > (uint32_t)(s->TimeOut * 1500)) {
+					// Only warn once per timeout period
+					static uint32_t lastWarn = 0;
+					if (now - lastWarn > 60000) {
+						LOG_WARN("[%p]: No events from %s for %u seconds (timeout=%ds), subscription may be stale",
+						         p, s->EventURL, age / 1000, s->TimeOut);
+						lastWarn = now;
+					}
+				}
+			}
+		}
+
 		// Check for expired pending volume 0 (temporal filtering)
 		if (p->HasPendingZeroVolume) {
-			uint32_t now = gettime_ms();
 			if (now - p->PendingZeroVolumeTime > VOLUME_ZERO_DELAY_MS) {
 				LOG_INFO("[%p]: Pending volume 0 timeout in polling thread - processing", p);
 				ApplyVolumeChange(p, 0, p->PendingZeroVolumeTime);
@@ -512,6 +532,12 @@ static void ProcessEvent(Upnp_EventType EventType, const void *_Event, void *Coo
 	char  *r = NULL;
 	char  *LastChange = NULL;
 
+	// Debug: simulate broken UPnP events (force polling-only mode)
+	if (getenv("CSPOT_DISABLE_UPNP_EVENTS")) {
+		LOG_SDEBUG("UPnP event ignored (CSPOT_DISABLE_UPNP_EVENTS set)");
+		return;
+	}
+
 	// this is async, so need to check context's validity
 	if (!CheckAndLock(Device)) return;
 
@@ -522,6 +548,14 @@ static void ProcessEvent(Upnp_EventType EventType, const void *_Event, void *Coo
 		pthread_mutex_unlock(&Device->Mutex);
 		NFREE(LastChange);
 		return;
+	}
+
+	// Update last event received timestamp for subscription health monitoring
+	for (int i = 0; i < NB_SRV; i++) {
+		if (!strcmp(Device->Service[i].EventURL, UpnpString_get_String(UpnpEvent_get_PublisherUrl(Event)))) {
+			Device->Service[i].LastEventReceivedTime = gettime_ms();
+			break;
+		}
 	}
 
 	// Feedback volume to Spotify server
@@ -810,10 +844,26 @@ int MasterHandler(Upnp_EventType EventType, const void *_Event, void *Cookie) {
 			s = EventURL2Service(UpnpEventSubscribe_get_PublisherUrl(_Event), Device->Service);
 			if (s != NULL) {
 				const char *eventType = (EventType == UPNP_EVENT_SUBSCRIPTION_EXPIRED) ? "EXPIRED" : "AUTORENEWAL_FAILED";
-				LOG_WARN("[%p]: Event subscription %s for %s (SID=%s), re-subscribing", 
-				         Device, eventType, s->EventURL, s->SID);
-				UpnpSubscribeAsync(glControlPointHandle, s->EventURL, s->TimeOut,
-								   MasterHandler, (void*) strdup(Device->UDN));
+				uint32_t now = gettime_ms();
+				
+				// Check if we're in backoff period
+				if (s->ResubscribeBackoffUntil > 0 && now < s->ResubscribeBackoffUntil) {
+					LOG_INFO("[%p]: Subscription %s for %s, but in backoff period (remaining: %us)",
+					         Device, eventType, s->EventURL, (s->ResubscribeBackoffUntil - now) / 1000);
+				} else if (s->ResubscribeAttempts >= 5) {
+					// Max attempts reached, enter 60s backoff
+					LOG_WARN("[%p]: Subscription %s for %s (SID=%s), max re-subscribe attempts reached, backing off for 60s",
+					         Device, eventType, s->EventURL, s->SID);
+					s->ResubscribeBackoffUntil = now + 60000;
+					s->ResubscribeAttempts = 0;  // Reset for next cycle
+				} else {
+					// Attempt re-subscription
+					s->ResubscribeAttempts++;
+					LOG_WARN("[%p]: Event subscription %s for %s (SID=%s), re-subscribing (attempt %u/5)", 
+					         Device, eventType, s->EventURL, s->SID, s->ResubscribeAttempts);
+					UpnpSubscribeAsync(glControlPointHandle, s->EventURL, s->TimeOut,
+									   MasterHandler, (void*) strdup(Device->UDN));
+				}
 			}
 
 			pthread_mutex_unlock(&Device->Mutex);
@@ -833,6 +883,9 @@ int MasterHandler(Upnp_EventType EventType, const void *_Event, void *Cookie) {
 			if (s != NULL) {
 				if (UpnpEventSubscribe_get_ErrCode(_Event) == UPNP_E_SUCCESS) {
 					s->Failed = 0;
+					s->ResubscribeAttempts = 0;  // Reset re-subscribe counter on success
+					s->ResubscribeBackoffUntil = 0;  // Clear backoff
+					s->LastEventReceivedTime = gettime_ms();  // Initialize event timestamp
 					strcpy(s->SID, UpnpString_get_String(UpnpEventSubscribe_get_SID(_Event)));
 					s->TimeOut = UpnpEventSubscribe_get_TimeOut(_Event);
 					LOG_INFO("[%p]: subscribe success for %s (SID=%s, timeout=%ds)", 
@@ -950,6 +1003,27 @@ static void *UpdateThread(void *args) {
 
 						Device->LastSeen = now;
 						LOG_DEBUG("[%p] UPnP keep alive: %s", Device, Device->Config.Name);
+
+						// Check for stale subscriptions (renderer may have rebooted with new SID)
+						// This catches renderer reboots before libupnp timeout (4-6 minutes)
+						for (int j = 0; j < NB_SRV; j++) {
+							struct sService *s = &Device->Service[j];
+							if (s->TimeOut > 0 && s->LastEventReceivedTime > 0) {
+								uint32_t age = (now * 1000) - s->LastEventReceivedTime;
+								// If no events for 90 seconds, assume renderer rebooted with new SID
+								if (age > 90000) {
+									LOG_INFO("[%p]: No events from %s for %u seconds on rediscovery, proactively re-subscribing",
+									         Device, s->EventURL, age / 1000);
+									// Unsubscribe old SID (likely stale after reboot)
+									if (*s->SID) {
+										UpnpUnSubscribeAsync(glControlPointHandle, s->SID, NULL, NULL);
+									}
+									// Re-subscribe to get fresh SID
+									UpnpSubscribeAsync(glControlPointHandle, s->EventURL, s->TimeOut,
+									                 MasterHandler, (void*) strdup(Device->UDN));
+								}
+							}
+						}
 
 						// check for name change
 						int rc = UpnpDownloadXmlDoc(Update->Data, &DescDoc);
@@ -1210,6 +1284,9 @@ static bool AddMRDevice(struct sMR* Device, char* UDN, IXML_Document* DescDoc, c
 			strncpy(s->EventURL, EventURL, RESOURCE_LENGTH - 1);
 			strncpy(s->Type, ServiceType, RESOURCE_LENGTH - 1);
 			s->TimeOut = cSearchedSRV[i].TimeOut;
+			s->LastEventReceivedTime = 0;
+			s->ResubscribeAttempts = 0;
+			s->ResubscribeBackoffUntil = 0;
 		}
 
 		if (ServiceURL && cSearchedSRV[i].idx == AVT_SRV_IDX && XMLFindAction(location, ServiceURL, "SetNextAVTransportURI") && Device->Config.Gapless) {

@@ -45,6 +45,9 @@ struct sService {
 	Upnp_SID		SID;
 	int32_t			TimeOut;
 	uint32_t		Failed;
+	uint32_t		LastEventReceivedTime;	// For subscription health monitoring
+	uint32_t		ResubscribeAttempts;		// Count of consecutive re-subscription attempts
+	uint32_t		ResubscribeBackoffUntil;	// Don't re-subscribe until this time (ms)
 };
 
 typedef struct sMRConfig
